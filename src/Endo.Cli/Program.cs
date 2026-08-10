@@ -339,7 +339,7 @@ internal static class Program
             return 1;
         }
 
-        var orchestrator = new AiOrchestrator(new NullAiProvider(), engine);
+        var orchestrator = new AiOrchestrator(new AnthropicAiProvider(), engine);
         var result = await orchestrator.AskAsync(args[2], context);
 
         Console.WriteLine(result.Message);

@@ -156,20 +156,33 @@ which matches the spec (GameModding is just one category among others, not a dis
   re-run `tool install`/`runtime install`; it does not silently re-fetch, since re-fetching a tool
   is itself the validated install pipeline, not a restore-time side effect.
 
-### Phase 8 — AI: **Interface implemented, no real provider wired in**
+### Phase 8 — AI: **Implemented with a real Claude provider**
 - `IAiProvider` / `AiCompletionRequest` / `AiCompletionResponse`: the provider-neutral contract.
-- `NullAiProvider`: the only provider registered in this build. Always returns
-  `Available = false` with an honest reason — per 06-AI-SPEC.md "No Invented State", an
-  unconfigured provider must not be reported as a success.
+- `AnthropicAiProvider` (`Endo.Core/Ai/AnthropicAiProvider.cs`): the default provider, using the
+  official `Anthropic` NuGet SDK. It constructs a zero-arg `AnthropicClient`, which resolves
+  credentials itself in order — `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, the active
+  `ant auth login` OAuth profile, then Workload Identity Federation — so a user authenticated via
+  the `ant` CLI needs no API key in the environment at all. No credential of any kind is read from
+  or written to `environment.json`, per 06-AI-SPEC.md "Security". On an auth failure it catches
+  `AnthropicUnauthorizedException` specifically and points the user at `ant auth login`; on any
+  other failure (including a `stop_reason: "refusal"` safety decline) it returns
+  `Available = false` with the real reason — never a fabricated success, per "No Invented State".
+  Model is `claude-opus-5` (`Endo.Core/Ai/AnthropicAiProvider.cs`'s `Model` constant).
+- `NullAiProvider`: kept as an explicit "no provider" option (e.g. for `endo setup` to select
+  literally none) and as the honest-failure reference implementation; not registered by default
+  now that a real provider exists.
 - `AiOrchestrator`: sends only the command *catalog* (name + one-line description from
   `CommandEngine.ListCommands()`) to the provider, never the full environment — per "Context
   Sources": "Do not automatically send the entire environment to every model request." Whatever
   command name comes back is checked against the real registry before executing; an unrecognized
   name is refused.
-- `endo ai ask "<request>"` is wired into the CLI and currently reports "no provider configured"
-  because no real LLM adapter exists yet. Wiring an actual cloud provider (OpenAI/Claude/etc.)
-  behind `IAiProvider` is the natural next increment and requires no changes to `CommandEngine`,
-  `AiOrchestrator`, or any existing command.
+- `endo ai ask "<request>"` is wired into the CLI. Verified manually end-to-end for the
+  honest-failure path (no credential present → `Available = false` with a clear message, not a
+  crash or a guess); a live successful call has **not** been exercised in this build session — this
+  sandbox has outbound network access to `api.anthropic.com` but no `ant` CLI installed and no
+  `ANTHROPIC_API_KEY`, so there was no credential to test a real round-trip with. Next session
+  should run `endo ai ask "..."` under a real `ant auth login` session to confirm the full loop
+  (catalog → Claude's JSON decision → validated dispatch through `CommandEngine`) end-to-end.
 
 ### Phase 9 — Dev Container: **Not implemented**
 No container definition exists yet. The architecture this build produces is container-ready in
@@ -188,7 +201,8 @@ built).
 
 ## What a next session should pick up first
 
-1. Wire a real `IAiProvider` (start with one cloud adapter) and exercise `endo ai ask` end to end.
+1. Exercise `endo ai ask` end to end under a real `ant auth login` session — the provider is wired
+   (`AnthropicAiProvider`), but only its no-credential failure path has been verified so far.
 2. Decide the runtime-removal question above (add a spec'd verb, or explicitly declare runtimes
    removal-protected-forever) rather than leaving it silently absent.
 3. Build the workflow engine (08-WORKFLOW-SPEC.md: cycles, task review states, self-referential

@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Endo.Cli/Endo.Cli.csproj" />
+    <Project Path="src/Endo.Core/Endo.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Endo.Core.Tests/Endo.Core.Tests.csproj" />
+  </Folder>
+</Solution>

@@ -27,7 +27,7 @@ build/
     Endo.Cli/    — argument parsing, interactive prompts, dispatch to CommandEngine
     Endo.Core/   — everything else, organized by roadmap phase (see below)
   tests/
-    Endo.Core.Tests/  — 33 xUnit tests, all passing
+    Endo.Core.Tests/  — 44 xUnit tests, all passing
 ```
 
 `Endo.Core` is deliberately one assembly with feature-folder namespaces
@@ -111,16 +111,35 @@ from `CommandEngine.ListCommands()`; an unrecognized name is refused, never impr
   command up to twice) — it is not diagnosis-and-fix. Actual error diagnosis ("read the error,
   search GitHub issues, attempt a reasonable code-level fix") requires the AI layer described in
   06-AI-SPEC.md, which is intentionally a stub in this build (see Phase 8).
-- GitHub/web *discovery* (05-TOOL-SYSTEM-SPEC.md "GitHub Discovery", "Unknown Games") is not
-  implemented — it requires live web/GitHub search, which belongs to Endo AI (Phase 8), not this
-  deterministic command layer. `tool.install` takes an already-identified `repository` — an AI
-  orchestrator would do discovery first, then call this command with the result.
+- GitHub/web *discovery* itself is not this layer's job — `tool.install` takes an already-identified
+  `repository` and is what Phase 5's discovery flow calls once it has found a candidate.
 
-### Phase 5 — GameModding discovery: **Not implemented**
-Depends entirely on Phase 8 (live AI + web/GitHub search). The hierarchy requirement itself
-(`GameModding/<Game>/<Project>`) is already satisfied by Phase 2's generic
-`Category/SubCategory/Name` structure — GameModding is not special-cased anywhere in the code,
-which matches the spec (GameModding is just one category among others, not a distinct system).
+### Phase 5 — GameModding discovery: **Implemented**
+`AiOrchestrator.DiscoverToolsAsync` (`Endo.Core/Ai/AiOrchestrator.cs`) implements
+05-TOOL-SYSTEM-SPEC.md's "Unknown Games" / "GitHub Discovery" flow:
+1. Prompts Claude with `EnableWebSearch: true` to research real, currently-maintained third-party
+   tools for a `Category/SubCategory` (e.g. `GameModding/Skyrim`), instructed to return only
+   candidates it actually found a GitHub URL for via search, as a strict JSON array.
+2. For every candidate, calls the exact same `tool.install` command a human would run — full
+   source-first clone → Scratchpad → README check → build/validate → register-only-on-success
+   pipeline from Phase 4. Discovery never registers anything itself; a name the provider claims
+   without a real repository simply fails to clone, so the deterministic pipeline is what actually
+   proves a candidate isn't invented, not the model's say-so.
+3. Reports per-candidate success/failure back to the user — "Endo should notify the user of
+   available tools" — via `endo ai discover <Category> <SubCategory>`.
+- The hierarchy requirement itself (`GameModding/<Game>/<Project>`) is satisfied by Phase 2's
+  generic `Category/SubCategory/Name` structure — GameModding is not special-cased anywhere in the
+  code, matching the spec (GameModding is one category among others, not a distinct system).
+- Not implemented: reading a candidate's README to auto-detect its actual build system
+  (05-TOOL-SYSTEM-SPEC.md "README Requirement" implies more than presence-checking). Today
+  `tool.install` only *locates* the README and records that it did; it doesn't parse build
+  instructions out of it, so discovered candidates install with no `--build`/`--validate` command
+  unless a human adds one afterward. Validation in that case falls back to "clone + checkout
+  succeeded," which is honest but shallower than the spec's full intent.
+- Not exercised end-to-end with a live credential in this session, same caveat as the rest of
+  Phase 8 below — the JSON parsing, candidate-loop, and `tool.install` wiring are covered by the
+  code path itself compiling and by Phase 4's existing install tests, but no live web-search
+  round-trip has been run.
 
 ### Phase 6 — Git/DevRepo: **Implemented**
 - `DevRepoService.Checkpoint`: locates `PUSH.md` by bounded breadth-first search (DevRepo, then
@@ -176,35 +195,88 @@ which matches the spec (GameModding is just one category among others, not a dis
   Sources": "Do not automatically send the entire environment to every model request." Whatever
   command name comes back is checked against the real registry before executing; an unrecognized
   name is refused.
-- `endo ai ask "<request>"` is wired into the CLI. Verified manually end-to-end for the
-  honest-failure path (no credential present → `Available = false` with a clear message, not a
-  crash or a guess); a live successful call has **not** been exercised in this build session — this
-  sandbox has outbound network access to `api.anthropic.com` but no `ant` CLI installed and no
-  `ANTHROPIC_API_KEY`, so there was no credential to test a real round-trip with. Next session
-  should run `endo ai ask "..."` under a real `ant auth login` session to confirm the full loop
-  (catalog → Claude's JSON decision → validated dispatch through `CommandEngine`) end-to-end.
+- `endo ai ask "<request>"` and `endo ai discover <Category> <SubCategory>` are wired into the CLI.
+  Verified manually end-to-end for the honest-failure path (no credential present →
+  `Available = false` with a clear message, not a crash or a guess); a live successful call has
+  **not** been exercised in this build session — this sandbox has outbound network access to
+  `api.anthropic.com` but no `ant` CLI installed and no `ANTHROPIC_API_KEY`, so there was no
+  credential to test a real round-trip with. Next session should run both commands under a real
+  `ant auth login` session to confirm the full loop (catalog/candidates → Claude's JSON decision →
+  validated dispatch through `CommandEngine`) end-to-end.
+- `AiCompletionRequest.EnableWebSearch` is a hint, not a contract — providers that ignore it
+  (`NullAiProvider`, any future local-model provider) just answer from what they already know.
+  `AnthropicAiProvider` honors it by attaching Anthropic's server-side `WebSearchTool20260209`.
+  One known gap: if the server-side search loop hits its default 10-iteration cap
+  (`stop_reason: "pause_turn"`) before finishing, this provider does **not** resume the turn —
+  resuming requires manually reconstructing the full response content as the next turn's assistant
+  message (a nontrivial per-block conversion the C# SDK has no helper for), which was judged not
+  worth the fragility for what should be an uncommon case on a bounded discovery query. A pause
+  with no text yet is reported as unavailable rather than silently truncated or looped.
 
-### Phase 9 — Dev Container: **Not implemented**
-No container definition exists yet. The architecture this build produces is container-ready in
-principle (managed root is fully self-contained under one directory tree, environment.json is the
-portable state description, DevRepo is the portable recovery mechanism) but nothing has been
-written or tested against an actual container.
+### Phase 9 — Dev Container: **Implemented and verified**
+- `Dockerfile` (build root): `mcr.microsoft.com/dotnet/sdk:10.0` + `git` — nothing else. Publishes
+  `endo` to `/opt/endo` and adds it to `PATH`. Deliberately bakes in no projects, tools, runtimes,
+  or DevRepo state, per 09-DOCKER-DEVCONTAINER-SPEC.md's "Minimal base environment" and "Container
+  is execution infrastructure, not the sole source of truth" — the container's only job is step 1
+  of "Clean Machine" (install/bootstrap Endo); steps 2-7 (connect DevRepo, restore state,
+  reconstruct runtimes/tools, reconnect projects) are exactly what `endo setup --restore all`
+  already does, reused as-is rather than reimplemented for the container.
+- `.devcontainer/devcontainer.json`: standard VS Code Dev Containers config pointing at the
+  Dockerfile, `workspaceFolder: /workspace`.
+- **Actually built and run** (Docker Desktop was not running at the start of this session; started
+  it, then verified): `docker build` succeeds; inside a fresh container, `endo setup` (interactive,
+  piped answers) → `endo project new GameModding Skyrim MyMod` → `endo project check` →
+  `endo setup --restore projects` (correctly reports "Already present") → `endo devrepo checkpoint`
+  all ran correctly end-to-end on Linux, cross-platform from the Windows dev machine this was built
+  on. One real (non-Endo) finding from that run: a fresh container has no git identity configured,
+  so the first `devrepo checkpoint` fails with git's own "Please tell me who you are" error —
+  Endo surfaced that error honestly rather than crashing or silently skipping the commit; setting
+  `git config --global user.email/user.name` resolved it. This is a normal git prerequisite on any
+  fresh machine, not something Endo should silently paper over by injecting a fake identity.
+- Not built: a `docker-compose.yml` or any multi-container orchestration — nothing in the spec asks
+  for it, and Endo's own state model (environment.json + DevRepo) is the "second competing state
+  system" the spec explicitly warns against re-inventing at the container layer.
 
-### Phase 10 — Hardening: **Partially covered**
-Covered by the current test suite: interrupted/invalid atomic writes, missing environment.json,
-missing project directories (drift), unknown commands, empty DevRepo checkpoints. Not covered:
-interrupted installs mid-build, offline operation end-to-end, multi-machine restore, AI
-hallucination prevention beyond the catalog-validation described above (there's no real provider
-to hallucinate yet), retry-loop prevention beyond the Phase 4 bounded-retry (no cyclic
-self-referential task instructions exist yet to test against, since Phase 8/workflow engine isn't
-built).
+### Phase 10 — Hardening: **Partially covered, expanded this session**
+Covered by the test suite (44 tests): interrupted/invalid atomic writes, missing environment.json,
+missing project directories (drift), unknown commands, empty DevRepo checkpoints, **and now**:
+- Interrupted/failed build mid-`ToolService.Install` (`ToolServiceHardeningTests`): a failing build
+  command leaves Scratchpad evidence in place, registers nothing, and records the bounded-retry
+  attempts — verified against a real local git repo, not a mock.
+- Unreachable/invalid source repository (`ToolServiceHardeningTests`), standing in for "offline
+  operation" at the acquisition layer: clone failure is reported honestly with no crash and no
+  registration.
+- Multi-machine restore reconciliation (`RestoreServiceTests`): environment.json referencing a
+  project/tool that isn't present on "this machine" is reported Missing + Unresolved, never
+  fabricated as Restored; a directory that exists but is missing `project.json` is repaired from
+  the already-known `ProjectRef` (not invented content); `RestoreAll` never reports
+  `FullySuccessful` while anything remains unresolved.
+- AI hallucination prevention (`AiOrchestratorHallucinationTests`): a stub `IAiProvider` proposing
+  a command name that was never registered is refused by `AiOrchestrator` itself — proven
+  deterministically, independent of live model behavior — with `CommandResult` staying `null`
+  (nothing executed) and the refusal message naming the invented command. A stub returning
+  non-JSON garbage also fails cleanly rather than throwing.
+- The real Dev Container build/run described in Phase 9 is itself a hardening exercise —
+  cross-platform behavior (Linux container vs. the Windows machine everything else was tested on)
+  was not previously verified at all.
+
+Still not covered: full offline operation *beyond* the single unreachable-repository case above
+(no systematic "disconnect every network-touching path" sweep); retry-loop prevention beyond the
+Phase 4 bounded-retry (no cyclic self-referential task instructions exist yet to test against,
+since the 08-WORKFLOW-SPEC.md workflow engine isn't built); AI hallucination prevention against a
+*live* model's actual behavior (the stub-provider tests prove `AiOrchestrator`'s refusal logic
+works, but no live Claude response has been checked against it yet, per the Phase 8 caveat above).
 
 ## What a next session should pick up first
 
-1. Exercise `endo ai ask` end to end under a real `ant auth login` session — the provider is wired
-   (`AnthropicAiProvider`), but only its no-credential failure path has been verified so far.
+1. Exercise `endo ai ask` and `endo ai discover` end to end under a real `ant auth login`
+   session — both are wired (`AnthropicAiProvider`, `AiOrchestrator.DiscoverToolsAsync`), but only
+   the no-credential failure path has been verified so far; no live model response has been seen.
 2. Decide the runtime-removal question above (add a spec'd verb, or explicitly declare runtimes
    removal-protected-forever) rather than leaving it silently absent.
 3. Build the workflow engine (08-WORKFLOW-SPEC.md: cycles, task review states, self-referential
-   instruction loop protection) — currently only the data shape (`tasks.active`) exists.
-4. GameModding discovery (Phase 5) once Phase 8 has a real provider to search the web/GitHub with.
+   instruction loop protection) — currently only the data shape (`tasks.active`) exists. This also
+   unblocks the remaining Phase 10 gap (retry-loop prevention has nothing to test against yet).
+4. Consider having discovered-tool README content actually parsed for build instructions (Phase 5
+   currently only detects README presence, not its contents) and implementing `pause_turn`
+   resumption in `AnthropicAiProvider` if long research queries turn out to need it in practice.

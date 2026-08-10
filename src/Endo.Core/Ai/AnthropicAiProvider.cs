@@ -30,15 +30,16 @@ public sealed class AnthropicAiProvider : IAiProvider
         Message response;
         try
         {
-            response = await _client.Messages.Create(
-                new MessageCreateParams
-                {
-                    Model = Model,
-                    MaxTokens = 2048,
-                    System = request.SystemPrompt,
-                    Messages = [new() { Role = Role.User, Content = request.UserPrompt }],
-                },
-                cancellationToken);
+            var parameters = new MessageCreateParams
+            {
+                Model = Model,
+                MaxTokens = request.MaxTokens,
+                System = request.SystemPrompt,
+                Messages = [new() { Role = Role.User, Content = request.UserPrompt }],
+                Tools = request.EnableWebSearch ? [new ToolUnion(new WebSearchTool20260209())] : null,
+            };
+
+            response = await _client.Messages.Create(parameters, cancellationToken);
         }
         catch (Anthropic.Exceptions.AnthropicUnauthorizedException)
         {
@@ -56,10 +57,20 @@ public sealed class AnthropicAiProvider : IAiProvider
             return new AiCompletionResponse(false, null, "Claude declined this request (safety refusal).");
         }
 
-        var text = response.Content.Select(b => b.Value).OfType<TextBlock>().FirstOrDefault()?.Text;
+        // Concatenate every text block rather than just the first — a web-search-enabled response
+        // typically interleaves server_tool_use/web_search_tool_result blocks with several text
+        // blocks (Claude narrating between searches), and the final answer is often not block 0.
+        var textBlocks = response.Content.Select(b => b.Value).OfType<TextBlock>().Select(t => t.Text).ToList();
+        var text = string.Join("\n", textBlocks);
+
         if (string.IsNullOrWhiteSpace(text))
         {
-            return new AiCompletionResponse(false, null, $"Claude returned no text content (stop_reason: {response.StopReason}).");
+            // stop_reason "pause_turn" means the server-side tool loop (default 10 iterations) hit
+            // its cap before finishing. Resuming requires replaying the full response content back
+            // as the next turn's assistant message; not implemented here (see AnthropicAiProvider
+            // remarks) — so a pause with no text yet is reported honestly rather than silently
+            // truncated or retried indefinitely.
+            return new AiCompletionResponse(false, null, $"Claude returned no usable text content (stop_reason: {response.StopReason}).");
         }
 
         return new AiCompletionResponse(true, text, null);

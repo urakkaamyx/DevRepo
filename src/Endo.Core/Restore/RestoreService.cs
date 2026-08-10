@@ -13,13 +13,6 @@ namespace Endo.Core.Restore;
 /// </summary>
 public sealed class RestoreService
 {
-    private readonly EnvironmentRepository _environmentRepository;
-
-    public RestoreService(EnvironmentRepository environmentRepository)
-    {
-        _environmentRepository = environmentRepository;
-    }
-
     public RestoreReport RestoreProjects(EnvironmentState state)
     {
         var report = new RestoreReport();

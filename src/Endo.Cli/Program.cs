@@ -95,7 +95,7 @@ internal static class Program
         engine.Register(new DevRepoCheckpointCommand(ctx => new DevRepoService(
             Path.Combine(ctx.Root, "DevRepo"), ctx.Root, ctx.Logger, Path.Combine(ctx.Root, "config"))));
 
-        var restoreService = new RestoreService(environmentRepository);
+        var restoreService = new RestoreService();
         engine.Register(new RestoreCommand(restoreService));
 
         engine.Register(new SetupCommand(new SetupService()));
@@ -333,17 +333,31 @@ internal static class Program
 
     private static async Task<int> RunAi(CommandEngine engine, CommandContext context, string[] args)
     {
-        if (args.Length < 3 || args[1] != "ask")
+        if (args.Length >= 3 && args[1] == "ask")
         {
-            Console.Error.WriteLine("Usage: endo ai ask \"<request>\"");
-            return 1;
+            var orchestrator = new AiOrchestrator(new AnthropicAiProvider(), engine);
+            var result = await orchestrator.AskAsync(args[2], context);
+
+            Console.WriteLine(result.Message);
+            return result.Success ? 0 : 1;
         }
 
-        var orchestrator = new AiOrchestrator(new AnthropicAiProvider(), engine);
-        var result = await orchestrator.AskAsync(args[2], context);
+        if (args.Length >= 4 && args[1] == "discover")
+        {
+            var orchestrator = new AiOrchestrator(new AnthropicAiProvider(), engine);
+            var report = await orchestrator.DiscoverToolsAsync(args[2], args[3], context);
 
-        Console.WriteLine(result.Message);
-        return result.Success ? 0 : 1;
+            PrintResultLine(report.Success, report.Message);
+            foreach (var r in report.Results)
+            {
+                Console.WriteLine($"  {(r.Success ? "[ok]" : "[fail]")} {r.Name}: {r.Message}");
+            }
+            return report.Success ? 0 : 1;
+        }
+
+        Console.Error.WriteLine("Usage: endo ai ask \"<request>\"");
+        Console.Error.WriteLine("       endo ai discover <Category> <SubCategory>");
+        return 1;
     }
 
     // ---- update ----
@@ -428,6 +442,7 @@ internal static class Program
           endo runtime set <runtime> --project <key> [--version v]
           endo devrepo checkpoint [--message <msg>]
           endo ai ask "<request>"
+          endo ai discover <Category> <SubCategory>
           endo update check
         """);
     }

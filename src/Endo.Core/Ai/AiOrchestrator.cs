@@ -1,9 +1,14 @@
+using System.Linq;
 using System.Text.Json;
 using Endo.Core.Commands;
 
 namespace Endo.Core.Ai;
 
 public sealed record AiAskResult(bool Success, string Message, CommandResult? CommandResult, string? ChosenCommand);
+
+public sealed record DiscoveredToolCandidate(string? Name, string? Repository, string? Ref, string? Notes);
+public sealed record ToolDiscoveryResult(string Name, bool Success, string Message);
+public sealed record ToolDiscoveryReport(bool Success, string Message, List<ToolDiscoveryResult> Results);
 
 /// <summary>
 /// Translates natural language into Endo commands and executes them through CommandEngine —
@@ -62,6 +67,96 @@ public sealed class AiOrchestrator
         var result = _commandEngine.Execute(decision.Command, context, args);
 
         return new AiAskResult(result.Success, result.Success ? result.Output : (result.Error ?? "Command failed."), result, decision.Command);
+    }
+
+    /// <summary>
+    /// Implements 05-TOOL-SYSTEM-SPEC.md "Unknown Games" / "GitHub Discovery": research the web
+    /// and GitHub for real tools, then validate each candidate through the exact same
+    /// <c>tool.install</c> command a human would use (source-first clone, Scratchpad, README
+    /// check, build/validate, register only on success) — discovery finds candidates, it never
+    /// registers anything itself. A candidate the provider names without having actually found a
+    /// repository is not "discovery"; the install step is what proves a name isn't invented, since
+    /// a fabricated URL simply fails to clone.
+    /// </summary>
+    public async Task<ToolDiscoveryReport> DiscoverToolsAsync(string category, string subCategory, CommandContext context, CancellationToken cancellationToken = default)
+    {
+        var systemPrompt =
+            "You are Endo AI performing tool discovery for a new modding category, per 05-TOOL-SYSTEM-SPEC.md. " +
+            $"Search the web and GitHub for currently-maintained, real, third-party tools commonly used to mod " +
+            $"'{subCategory}' (category: {category}). Identify up to 5 candidates. For each, you must have found " +
+            "an actual GitHub repository URL via search — never invent one. " +
+            "Respond with ONLY a JSON array, no prose, no markdown code fences: " +
+            "[{\"name\": \"...\", \"repository\": \"https://github.com/...\", \"ref\": \"main\", \"notes\": \"...\"}]. " +
+            "If you find nothing credible, respond with an empty array: [].";
+
+        var userPrompt = $"Find modding tools for: {category} / {subCategory}";
+
+        var response = await _provider.CompleteAsync(
+            new AiCompletionRequest(systemPrompt, userPrompt, EnableWebSearch: true, MaxTokens: 4096),
+            cancellationToken);
+
+        if (!response.Available)
+        {
+            return new ToolDiscoveryReport(false, response.UnavailableReason ?? "AI provider unavailable.", new List<ToolDiscoveryResult>());
+        }
+
+        List<DiscoveredToolCandidate>? candidates;
+        try
+        {
+            var json = ExtractJsonArray(response.Text ?? string.Empty);
+            candidates = JsonSerializer.Deserialize<List<DiscoveredToolCandidate>>(json,
+                new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+        }
+        catch (JsonException ex)
+        {
+            return new ToolDiscoveryReport(false, $"Provider response was not valid structured output: {ex.Message}", new List<ToolDiscoveryResult>());
+        }
+
+        if (candidates is null || candidates.Count == 0)
+        {
+            return new ToolDiscoveryReport(true, $"No credible tools found for '{category}/{subCategory}'.", new List<ToolDiscoveryResult>());
+        }
+
+        var results = new List<ToolDiscoveryResult>();
+        foreach (var candidate in candidates)
+        {
+            if (string.IsNullOrWhiteSpace(candidate.Name) || string.IsNullOrWhiteSpace(candidate.Repository))
+            {
+                results.Add(new ToolDiscoveryResult(candidate.Name ?? "(unnamed)", false, "Candidate missing name or repository; skipped."));
+                continue;
+            }
+
+            var args = new Dictionary<string, string>
+            {
+                ["name"] = candidate.Name,
+                ["repository"] = candidate.Repository,
+                ["scopeCategory"] = category,
+                ["scopeSubCategory"] = subCategory,
+            };
+            if (!string.IsNullOrWhiteSpace(candidate.Ref))
+            {
+                args["ref"] = candidate.Ref;
+            }
+
+            // Goes through CommandEngine like any other invocation — the real validation pipeline
+            // (clone, Scratchpad, build/validate, register-only-on-success) is what turns a
+            // discovered name into a trustworthy one, not the provider's say-so.
+            var installResult = _commandEngine.Execute("tool.install", context, args);
+            results.Add(new ToolDiscoveryResult(
+                candidate.Name,
+                installResult.Success,
+                installResult.Success ? installResult.Output : (installResult.Error ?? "Install failed.")));
+        }
+
+        var succeeded = results.Count(r => r.Success);
+        return new ToolDiscoveryReport(true, $"Discovery complete: {succeeded}/{results.Count} candidate(s) validated and registered.", results);
+    }
+
+    private static string ExtractJsonArray(string text)
+    {
+        var start = text.IndexOf('[');
+        var end = text.LastIndexOf(']');
+        return start >= 0 && end > start ? text[start..(end + 1)] : text;
     }
 
     private static string BuildSystemPrompt(IReadOnlyList<CommandDescriptor> catalog)

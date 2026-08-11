@@ -27,7 +27,7 @@ build/
     Endo.Cli/    — argument parsing, interactive prompts, dispatch to CommandEngine
     Endo.Core/   — everything else, organized by roadmap phase (see below)
   tests/
-    Endo.Core.Tests/  — 44 xUnit tests, all passing
+    Endo.Core.Tests/  — 46 xUnit tests, all passing
 ```
 
 `Endo.Core` is deliberately one assembly with feature-folder namespaces
@@ -44,6 +44,14 @@ justified by anything in the spec and would be an unnecessary abstraction.
 `Endo.Cli/Program.cs` and `Endo.Core/Ai/AiOrchestrator.cs` call through it — neither performs
 state-changing work any other way. `AiOrchestrator` only ever executes a command name it gets back
 from `CommandEngine.ListCommands()`; an unrecognized name is refused, never improvised.
+
+`ICommand` also exposes `Parameters` (the real `args` dictionary keys the command reads), and
+`CommandDescriptor`/`AiOrchestrator`'s system prompt list them explicitly per command
+(`project.new(category, subCategory, name): ...`) rather than only a name + prose description.
+This was added after live testing (see Phase 8) showed a real model inferring plausible-but-wrong
+key names (`Category`, `ProjectName`) from the description text alone — a reliability gap in "AI
+should use the actual command definitions" that affects every provider, not just the local one
+that surfaced it.
 
 ## Phase-by-phase status
 
@@ -94,13 +102,22 @@ from `CommandEngine.ListCommands()`; an unrecognized name is refused, never impr
 
 ### Phase 4 — Tools: **Implemented**
 - `ToolService.Install` follows 05-TOOL-SYSTEM-SPEC.md's Validation Lifecycle in order: Acquire
-  (git clone, source-first) → Scratchpad (always cleared/disposable first) → Documentation
-  (locates README.md/.rst/.txt/bare README, recorded in the report) → Setup/Build (optional build
-  command) → Test (optional validate command) → bounded retry (2 attempts per step, captured as
-  "recovery attempts") → PASS → move out of Scratchpad and register, or FAIL → leave Scratchpad
-  evidence in place and return a report with every field 05-TOOL-SYSTEM-SPEC.md's "Failure
-  Reports" section lists (repo, ref, docs reviewed, succeeded/failed steps, errors, recovery
-  attempts, final reason). Nothing is registered on failure.
+  (git clone source-first, **or a release/archive download as fallback** — see below) →
+  Scratchpad (always cleared/disposable first) → Documentation (locates README.md/.rst/.txt/bare
+  README, recorded in the report) → Setup/Build (optional build command) → Test (optional validate
+  command) → bounded retry (2 attempts per step, captured as "recovery attempts") → PASS → move
+  out of Scratchpad and register, or FAIL → leave Scratchpad evidence in place and return a report
+  with every field 05-TOOL-SYSTEM-SPEC.md's "Failure Reports" section lists (repo, ref, docs
+  reviewed, succeeded/failed steps, errors, recovery attempts, final reason). Nothing is registered
+  on failure.
+- **Release/archive acquisition** (`ToolInstallRequest.ReleaseUrl`, mutually exclusive with
+  `Repository`): downloads a zip via a shared `HttpClient` and extracts it straight into
+  Scratchpad, then continues through the same documentation/build/validate/register pipeline as
+  the git path. Closes the "Release fallback works" acceptance criterion, previously flagged as an
+  unimplemented gap. **Verified for real**, not just unit-tested: used to install Ollama itself
+  (`endo tool install Ollama --release https://github.com/ollama/ollama/releases/.../ollama-windows-amd64.zip --version 0.32.7 --validate "ollama.exe --version"`)
+  — downloaded ~700MB, extracted, validated, and registered correctly. A release install requires
+  an explicit `--version` (there's no commit hash to derive one from).
 - General vs. scoped tools (`Category/SubCategory` key), multiple versions retained indefinitely,
   channels (`latest` updated on install; `stable`/`develop`/`custom` are supported by the data
   model but nothing currently *writes* to them besides `latest` — promoting a version to
@@ -136,10 +153,20 @@ from `CommandEngine.ListCommands()`; an unrecognized name is refused, never impr
   instructions out of it, so discovered candidates install with no `--build`/`--validate` command
   unless a human adds one afterward. Validation in that case falls back to "clone + checkout
   succeeded," which is honest but shallower than the spec's full intent.
-- Not exercised end-to-end with a live credential in this session, same caveat as the rest of
-  Phase 8 below — the JSON parsing, candidate-loop, and `tool.install` wiring are covered by the
-  code path itself compiling and by Phase 4's existing install tests, but no live web-search
-  round-trip has been run.
+- **Verified live** against a real local model (`endo ai discover GameModding Skyrim` under
+  Ollama/llama3.2): the candidate-loop, JSON parsing, and `tool.install` wiring all ran for real.
+  The model (no real web search available to it locally) recalled a plausible tool name
+  ("TES5Edit") from training data with a repository URL that doesn't actually resolve — `git
+  clone` failed, and the discovery report correctly showed `0/1 candidate(s) validated and
+  registered`. This is exactly the intended safety property working: a name without a real,
+  clonable repository never becomes a registered tool, regardless of how confidently the model
+  stated it. **Not yet verified**: a live round-trip against Claude specifically (which does have
+  real web search via `EnableWebSearch`), for the same credential-availability reason as the rest
+  of Phase 8.
+- Fixed during that live test: the response parser only accepted a top-level JSON array, but a
+  provider asked for "a JSON array" sometimes returns a single JSON object instead (observed with
+  Ollama's constrained `format: "json"` decoding, which guarantees valid JSON but not the specific
+  shape requested). `DiscoverToolsAsync` now accepts a bare object as a one-candidate result.
 
 ### Phase 6 — Git/DevRepo: **Implemented**
 - `DevRepoService.Checkpoint`: locates `PUSH.md` by bounded breadth-first search (DevRepo, then
@@ -175,43 +202,74 @@ from `CommandEngine.ListCommands()`; an unrecognized name is refused, never impr
   re-run `tool install`/`runtime install`; it does not silently re-fetch, since re-fetching a tool
   is itself the validated install pipeline, not a restore-time side effect.
 
-### Phase 8 — AI: **Implemented with a real Claude provider**
+### Phase 8 — AI: **Implemented with two real providers — one fully verified live**
 - `IAiProvider` / `AiCompletionRequest` / `AiCompletionResponse`: the provider-neutral contract.
-- `AnthropicAiProvider` (`Endo.Core/Ai/AnthropicAiProvider.cs`): the default provider, using the
-  official `Anthropic` NuGet SDK. It constructs a zero-arg `AnthropicClient`, which resolves
-  credentials itself in order — `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, the active
-  `ant auth login` OAuth profile, then Workload Identity Federation — so a user authenticated via
-  the `ant` CLI needs no API key in the environment at all. No credential of any kind is read from
-  or written to `environment.json`, per 06-AI-SPEC.md "Security". On an auth failure it catches
-  `AnthropicUnauthorizedException` specifically and points the user at `ant auth login`; on any
-  other failure (including a `stop_reason: "refusal"` safety decline) it returns
-  `Available = false` with the real reason — never a fabricated success, per "No Invented State".
-  Model is `claude-opus-5` (`Endo.Core/Ai/AnthropicAiProvider.cs`'s `Model` constant).
-- `NullAiProvider`: kept as an explicit "no provider" option (e.g. for `endo setup` to select
-  literally none) and as the honest-failure reference implementation; not registered by default
-  now that a real provider exists.
-- `AiOrchestrator`: sends only the command *catalog* (name + one-line description from
-  `CommandEngine.ListCommands()`) to the provider, never the full environment — per "Context
-  Sources": "Do not automatically send the entire environment to every model request." Whatever
-  command name comes back is checked against the real registry before executing; an unrecognized
-  name is refused.
-- `endo ai ask "<request>"` and `endo ai discover <Category> <SubCategory>` are wired into the CLI.
-  Verified manually end-to-end for the honest-failure path (no credential present →
-  `Available = false` with a clear message, not a crash or a guess); a live successful call has
-  **not** been exercised in this build session — this sandbox has outbound network access to
-  `api.anthropic.com` but no `ant` CLI installed and no `ANTHROPIC_API_KEY`, so there was no
-  credential to test a real round-trip with. Next session should run both commands under a real
-  `ant auth login` session to confirm the full loop (catalog/candidates → Claude's JSON decision →
-  validated dispatch through `CommandEngine`) end-to-end.
-- `AiCompletionRequest.EnableWebSearch` is a hint, not a contract — providers that ignore it
-  (`NullAiProvider`, any future local-model provider) just answer from what they already know.
-  `AnthropicAiProvider` honors it by attaching Anthropic's server-side `WebSearchTool20260209`.
-  One known gap: if the server-side search loop hits its default 10-iteration cap
-  (`stop_reason: "pause_turn"`) before finishing, this provider does **not** resume the turn —
-  resuming requires manually reconstructing the full response content as the next turn's assistant
-  message (a nontrivial per-block conversion the C# SDK has no helper for), which was judged not
-  worth the fragility for what should be an uncommon case on a bounded discovery query. A pause
-  with no text yet is reported as unavailable rather than silently truncated or looped.
+  Request carries three provider hints, each optional and ignorable: `EnableWebSearch`,
+  `MaxTokens`, `ForceJsonOutput` (ask the provider to constrain decoding to valid JSON where it
+  can — see OllamaAiProvider below).
+- **`AnthropicAiProvider`** (`Endo.Core/Ai/AnthropicAiProvider.cs`): cloud provider using the
+  official `Anthropic` NuGet SDK. Zero-arg `AnthropicClient` resolves credentials itself — API key,
+  auth token, `ant auth login` OAuth profile, or Workload Identity Federation — so no key needs to
+  live in the environment at all. No credential of any kind is read from or written to
+  `environment.json` (06-AI-SPEC.md "Security"). Auth failures and safety refusals both report
+  `Available = false` with the real reason, never a fabricated success. Model is `claude-opus-5`.
+  **Still not verified against a live response** — this sandbox has no `ant` CLI and no
+  `ANTHROPIC_API_KEY`, so only its no-credential failure path has been exercised.
+- **`OllamaAiProvider`** (`Endo.Core/Ai/OllamaAiProvider.cs`): local-model provider, per
+  06-AI-SPEC.md's local-first goal — added because the user explicitly wants to run a local model
+  rather than authenticate to a cloud provider. Talks to a local Ollama server over its native
+  `/api/chat` HTTP endpoint (not the Anthropic SDK — a local model doesn't speak that wire format).
+  `EnableWebSearch` is silently ignored (no local search tool to attach); `ForceJsonOutput` maps to
+  Ollama's `format: "json"` constrained decoding.
+  **Fully verified live, start to finish, in this session**:
+  1. `endo tool install Ollama --release .../ollama-windows-amd64.zip --version 0.32.7 --validate "ollama.exe --version"`
+     — installed *into the Endo workspace* via the (also new) release-acquisition path, not the
+     machine's global Ollama.
+  2. `endo ai serve --model qwen2.5:0.5b` (and again with `llama3.2`) — started the workspace's own
+     `ollama.exe serve` (env `OLLAMA_MODELS` pointed at a workspace-local models directory,
+     `OLLAMA_HOST` configurable), polled for readiness, then `ollama.exe pull <model>` with live
+     progress streamed straight to the console.
+  3. `endo ai ask "Create a new project called MyMod under GameModding for Skyrim"` — with
+     `llama3.2`, this produced the correct command name and correct argument keys, which
+     `CommandEngine` executed for real: `GameModding/Skyrim/MyMod` was created on disk with a
+     correct `project.json`. With the much smaller `qwen2.5:0.5b`, the same request initially
+     failed at each stage in turn (plain-prose reply → wrong-cased argument keys) — each failure is
+     what led to the `ForceJsonOutput` hint and the `ICommand.Parameters` fix above; after both
+     fixes, `llama3.2` completed the full loop correctly.
+  4. `endo ai discover GameModding Skyrim` — see Phase 5 above for that result.
+- **`OllamaServerManager`** (`Endo.Core/Ai/OllamaServerManager.cs`) + `ollama.serve`/`ollama.pull`
+  commands: starts the workspace Ollama binary as a detached background process only if nothing is
+  already responding at the configured address (never assumes a fixed startup delay — polls),
+  redirects its log to `Cache/Logs/ollama-serve.log`, and pulls models with live console output
+  (deliberately not captured/buffered, since `ollama pull`'s progress bar only makes sense streamed
+  directly). **Known gap found during cleanup**: `ollama serve` spawns a separate
+  `llama-server.exe` child process to actually run inference, and stopping/killing the parent
+  `ollama.exe` does not stop that child — a real user wanting to fully shut things down needs to
+  stop both. There is currently no `endo ai stop` command at all; this should be added alongside
+  fixing the shutdown behavior.
+- **`AiProviderFactory`** (`Endo.Core/Ai/AiProviderFactory.cs`): builds the active provider from
+  `environment.json`'s `ai.provider` (+ `ai.model`, `ai.baseUrl` for Ollama) instead of the CLI
+  hardcoding Anthropic. An unset/unrecognized provider resolves to `NullAiProvider` — honestly "not
+  configured" rather than silently defaulting to a provider the user never chose. `endo setup`'s
+  interactive AI-provider prompt now accepts `ollama` and, if chosen, asks for a model name
+  (default suggestion `llama3.2`); the deterministic `setup` command accepts the same via
+  `aiProvider`/`aiModel` args. There is currently no way to *change* the configured provider after
+  initial setup short of re-running `endo setup` (which asks to confirm overwriting the existing
+  config) or hand-editing `environment.json` — a dedicated `endo config set ai.provider ollama`
+  verb would be a reasonable follow-up.
+- `NullAiProvider`: kept as an explicit "no provider" option and as the honest-failure reference
+  implementation.
+- `AiOrchestrator`: sends only the command *catalog* to the provider — now name, description,
+  **and real parameter names** (see the architectural-rule section above) — never the full
+  environment. Whatever command name comes back is checked against the real registry before
+  executing; an unrecognized name is refused. Both `AskAsync` and `DiscoverToolsAsync` now request
+  `ForceJsonOutput: true`.
+- `endo ai ask "<request>"`, `endo ai discover <Category> <SubCategory>`, and
+  `endo ai serve [--model <name>] [--base-url <url>]` are all wired into the CLI.
+- Known gap carried over from before: if Anthropic's server-side web-search loop hits its default
+  10-iteration cap (`stop_reason: "pause_turn"`), `AnthropicAiProvider` does not resume the turn —
+  judged not worth the fragility of manually reconstructing response content for what should be an
+  uncommon case. A pause with no text yet is reported as unavailable rather than silently truncated.
 
 ### Phase 9 — Dev Container: **Implemented and verified**
 - `Dockerfile` (build root): `mcr.microsoft.com/dotnet/sdk:10.0` + `git` — nothing else. Publishes
@@ -237,12 +295,14 @@ from `CommandEngine.ListCommands()`; an unrecognized name is refused, never impr
   for it, and Endo's own state model (environment.json + DevRepo) is the "second competing state
   system" the spec explicitly warns against re-inventing at the container layer.
 
-### Phase 10 — Hardening: **Partially covered, expanded this session**
-Covered by the test suite (44 tests): interrupted/invalid atomic writes, missing environment.json,
-missing project directories (drift), unknown commands, empty DevRepo checkpoints, **and now**:
+### Phase 10 — Hardening: **Partially covered, substantially expanded this session**
+Covered by the test suite (46 tests): interrupted/invalid atomic writes, missing environment.json,
+missing project directories (drift), unknown commands, empty DevRepo checkpoints, plus:
 - Interrupted/failed build mid-`ToolService.Install` (`ToolServiceHardeningTests`): a failing build
   command leaves Scratchpad evidence in place, registers nothing, and records the bounded-retry
-  attempts — verified against a real local git repo, not a mock.
+  attempts — verified against a real local git repo, not a mock. Extended with two more cases for
+  the new release-acquisition path: missing `--version` fails before any network call, and an
+  unreachable release URL fails honestly.
 - Unreachable/invalid source repository (`ToolServiceHardeningTests`), standing in for "offline
   operation" at the acquisition layer: clone failure is reported honestly with no crash and no
   registration.
@@ -255,28 +315,37 @@ missing project directories (drift), unknown commands, empty DevRepo checkpoints
   a command name that was never registered is refused by `AiOrchestrator` itself — proven
   deterministically, independent of live model behavior — with `CommandResult` staying `null`
   (nothing executed) and the refusal message naming the invented command. A stub returning
-  non-JSON garbage also fails cleanly rather than throwing.
-- The real Dev Container build/run described in Phase 9 is itself a hardening exercise —
-  cross-platform behavior (Linux container vs. the Windows machine everything else was tested on)
-  was not previously verified at all.
+  non-JSON garbage also fails cleanly rather than throwing. **This property was then also proven
+  against a real model**, not just a stub: see Phase 5/8 above — a live local model recalled a
+  plausible-sounding but non-existent tool repository, and the deterministic install pipeline's
+  actual clone attempt (not any AI-side check) is what caught it and prevented registration.
+- The real Dev Container build/run (Phase 9) and the real Ollama install/serve/pull/ask loop
+  (Phase 8) are themselves hardening exercises — cross-platform behavior (Linux container) and a
+  full live AI round-trip (impossible to test against Anthropic in this sandbox) were both
+  previously unverified.
 
-Still not covered: full offline operation *beyond* the single unreachable-repository case above
-(no systematic "disconnect every network-touching path" sweep); retry-loop prevention beyond the
+Still not covered: full offline operation *beyond* the unreachable-repository/URL cases above (no
+systematic "disconnect every network-touching path" sweep); retry-loop prevention beyond the
 Phase 4 bounded-retry (no cyclic self-referential task instructions exist yet to test against,
-since the 08-WORKFLOW-SPEC.md workflow engine isn't built); AI hallucination prevention against a
-*live* model's actual behavior (the stub-provider tests prove `AiOrchestrator`'s refusal logic
-works, but no live Claude response has been checked against it yet, per the Phase 8 caveat above).
+since the 08-WORKFLOW-SPEC.md workflow engine isn't built); a live round-trip against Claude
+specifically (Ollama closed the "live model" gap in general, but the Anthropic path itself is
+still only verified for its no-credential failure path).
 
 ## What a next session should pick up first
 
-1. Exercise `endo ai ask` and `endo ai discover` end to end under a real `ant auth login`
-   session — both are wired (`AnthropicAiProvider`, `AiOrchestrator.DiscoverToolsAsync`), but only
-   the no-credential failure path has been verified so far; no live model response has been seen.
-2. Decide the runtime-removal question above (add a spec'd verb, or explicitly declare runtimes
+1. Exercise `endo ai ask` and `endo ai discover` under a real Claude credential (`ant auth login`)
+   — the Ollama path is now fully proven live; Anthropic's only verified path is still the
+   no-credential failure case.
+2. Fix Ollama shutdown: `endo ai serve` starts `ollama.exe`, which spawns a `llama-server.exe`
+   child that isn't stopped when the parent is. Add an `endo ai stop` command that stops both.
+3. Add a way to change AI provider/model after initial setup without re-running the whole
+   interactive `endo setup` flow or hand-editing `environment.json` (e.g. `endo config set
+   ai.provider ollama`) — came up directly while testing this session.
+4. Decide the runtime-removal question above (add a spec'd verb, or explicitly declare runtimes
    removal-protected-forever) rather than leaving it silently absent.
-3. Build the workflow engine (08-WORKFLOW-SPEC.md: cycles, task review states, self-referential
+5. Build the workflow engine (08-WORKFLOW-SPEC.md: cycles, task review states, self-referential
    instruction loop protection) — currently only the data shape (`tasks.active`) exists. This also
    unblocks the remaining Phase 10 gap (retry-loop prevention has nothing to test against yet).
-4. Consider having discovered-tool README content actually parsed for build instructions (Phase 5
+6. Consider having discovered-tool README content actually parsed for build instructions (Phase 5
    currently only detects README presence, not its contents) and implementing `pause_turn`
    resumption in `AnthropicAiProvider` if long research queries turn out to need it in practice.

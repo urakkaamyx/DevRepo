@@ -9,6 +9,7 @@ public sealed class RuntimeListCommand : ICommand
 
     public string Name => "runtime.list";
     public string Description => "List registered runtimes and their installed versions.";
+    public IReadOnlyList<string> Parameters => [];
 
     public CommandResult Execute(CommandContext context, IReadOnlyDictionary<string, string> args)
     {
@@ -28,6 +29,7 @@ public sealed class RuntimeInstallCommand : ICommand
 
     public string Name => "runtime.install";
     public string Description => "Register an already-present runtime installation at a given path (see RuntimeService remarks on scope).";
+    public IReadOnlyList<string> Parameters => ["name", "version", "path", "notes"];
 
     public CommandResult Execute(CommandContext context, IReadOnlyDictionary<string, string> args)
     {
@@ -60,6 +62,7 @@ public sealed class RuntimeSetCommand : ICommand
 
     public string Name => "runtime.set";
     public string Description => "Select an installed runtime version for a specific project. Availability and selection are separate.";
+    public IReadOnlyList<string> Parameters => ["project", "runtime", "version"];
 
     public CommandResult Execute(CommandContext context, IReadOnlyDictionary<string, string> args)
     {

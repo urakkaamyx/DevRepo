@@ -35,6 +35,7 @@ public sealed class CommandEngineTests
     {
         public string Name => "echo";
         public string Description => "Echoes an arg back.";
+        public IReadOnlyList<string> Parameters => ["text"];
         public CommandResult Execute(CommandContext context, IReadOnlyDictionary<string, string> args) =>
             CommandResult.Ok(args.GetValueOrDefault("text", ""));
     }

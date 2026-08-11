@@ -112,4 +112,38 @@ public sealed class ToolServiceHardeningTests : IDisposable
         Assert.False(Directory.Exists(report.ScratchpadPath), "Successful install moves out of Scratchpad rather than leaving a copy behind.");
         Assert.True(_state.Tools.General.ContainsKey("SampleTool"));
     }
+
+    [Fact]
+    public void Install_ReleaseAcquisition_MissingVersion_FailsBeforeAttemptingDownload()
+    {
+        var request = new ToolInstallRequest
+        {
+            Name = "SomeReleaseTool",
+            ReleaseUrl = "https://example.invalid/does-not-matter.zip",
+        };
+
+        var report = _service.Install(_state, request);
+
+        Assert.False(report.Success);
+        Assert.Contains("acquire (release)", report.StepsFailed);
+        Assert.Empty(_state.Tools.General);
+    }
+
+    [Fact]
+    public void Install_ReleaseAcquisition_UnreachableUrl_FailsHonestlyWithoutCrashing()
+    {
+        var request = new ToolInstallRequest
+        {
+            Name = "SomeReleaseTool",
+            ReleaseUrl = "https://this-host-does-not-exist.invalid/archive.zip",
+            Version = "1.0.0",
+        };
+
+        var report = _service.Install(_state, request);
+
+        Assert.False(report.Success);
+        Assert.Contains("acquire (release download)", report.StepsFailed);
+        Assert.NotEmpty(report.Errors);
+        Assert.Empty(_state.Tools.General);
+    }
 }

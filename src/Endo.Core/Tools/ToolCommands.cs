@@ -9,6 +9,7 @@ public sealed class ToolListCommand : ICommand
 
     public string Name => "tool.list";
     public string Description => "List all registered tools (general and scoped) with their installed versions and active channels.";
+    public IReadOnlyList<string> Parameters => [];
 
     public CommandResult Execute(CommandContext context, IReadOnlyDictionary<string, string> args)
     {
@@ -28,6 +29,7 @@ public sealed class ToolInfoCommand : ICommand
 
     public string Name => "tool.info";
     public string Description => "Show the full manifest for one tool.";
+    public IReadOnlyList<string> Parameters => ["name", "scopeCategory", "scopeSubCategory"];
 
     public CommandResult Execute(CommandContext context, IReadOnlyDictionary<string, string> args)
     {
@@ -62,15 +64,20 @@ public sealed class ToolInstallCommand : ICommand
     public ToolInstallCommand(ToolService toolService) => _toolService = toolService;
 
     public string Name => "tool.install";
-    public string Description => "Clone a tool's source into the Scratchpad, build/validate it, and register it only if validation passes.";
+    public string Description => "Acquire a tool (git clone, source-first, or a release archive as fallback) into the Scratchpad, build/validate it, and register it only if validation passes.";
+    public IReadOnlyList<string> Parameters => ["name", "repository", "releaseUrl", "ref", "version", "scopeCategory", "scopeSubCategory", "buildCommand", "validateCommand"];
 
     public CommandResult Execute(CommandContext context, IReadOnlyDictionary<string, string> args)
     {
         var state = context.Environment ??= context.EnvironmentRepository.Load();
 
-        if (!args.TryGetValue("name", out var name) || !args.TryGetValue("repository", out var repository))
+        args.TryGetValue("repository", out var repository);
+        args.TryGetValue("releaseUrl", out var releaseUrl);
+
+        if (!args.TryGetValue("name", out var name) ||
+            (string.IsNullOrWhiteSpace(repository) && string.IsNullOrWhiteSpace(releaseUrl)))
         {
-            return CommandResult.Fail("tool.install requires 'name' and 'repository' arguments.");
+            return CommandResult.Fail("tool.install requires 'name' and either 'repository' (git) or 'releaseUrl' (archive fallback).");
         }
 
         args.TryGetValue("ref", out var gitRef);
@@ -83,8 +90,9 @@ public sealed class ToolInstallCommand : ICommand
         var request = new ToolInstallRequest
         {
             Name = name,
-            Repository = repository,
+            Repository = string.IsNullOrWhiteSpace(repository) ? null : repository,
             Ref = string.IsNullOrWhiteSpace(gitRef) ? "main" : gitRef,
+            ReleaseUrl = string.IsNullOrWhiteSpace(releaseUrl) ? null : releaseUrl,
             Version = version,
             ScopeCategory = string.IsNullOrWhiteSpace(scopeCategory) ? null : scopeCategory,
             ScopeSubCategory = string.IsNullOrWhiteSpace(scopeSubCategory) ? null : scopeSubCategory,
@@ -128,6 +136,7 @@ public sealed class ToolRemoveCommand : ICommand
 
     public string Name => "tool.remove";
     public string Description => "Remove a tool (or one version of it). Protected by dependent-project checks unless --force is set.";
+    public IReadOnlyList<string> Parameters => ["name", "scopeCategory", "scopeSubCategory", "version", "force"];
 
     public CommandResult Execute(CommandContext context, IReadOnlyDictionary<string, string> args)
     {

@@ -14,6 +14,7 @@ public sealed class DevRepoCheckpointCommand : ICommand
 
     public string Name => "devrepo.checkpoint";
     public string Description => "Locate PUSH.md, review actual DevRepo changes, generate the Recommended Push message, and commit.";
+    public IReadOnlyList<string> Parameters => ["message"];
 
     public CommandResult Execute(CommandContext context, IReadOnlyDictionary<string, string> args)
     {

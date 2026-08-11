@@ -100,6 +100,9 @@ internal static class Program
 
         engine.Register(new SetupCommand(new SetupService()));
 
+        engine.Register(new OllamaServeCommand());
+        engine.Register(new OllamaPullCommand());
+
         return engine;
     }
 
@@ -243,10 +246,11 @@ internal static class Program
             }
             case "install":
             {
-                if (args.Length < 3) { Console.Error.WriteLine("Usage: endo tool install <name> --repo <url> [--ref <ref>] [--version <v>] [--scope Category/SubCategory] [--build <cmd>] [--validate <cmd>]"); return 1; }
+                if (args.Length < 3) { Console.Error.WriteLine("Usage: endo tool install <name> (--repo <url> | --release <url>) [--ref <ref>] [--version <v>] [--scope Category/SubCategory] [--build <cmd>] [--validate <cmd>]"); return 1; }
                 var cmdArgs = new Dictionary<string, string> { ["name"] = args[2] };
                 ApplyScopeOption(args, cmdArgs);
                 ApplyOption(args, "--repo", "repository", cmdArgs);
+                ApplyOption(args, "--release", "releaseUrl", cmdArgs);
                 ApplyOption(args, "--ref", "ref", cmdArgs);
                 ApplyOption(args, "--version", "version", cmdArgs);
                 ApplyOption(args, "--build", "buildCommand", cmdArgs);
@@ -333,9 +337,11 @@ internal static class Program
 
     private static async Task<int> RunAi(CommandEngine engine, CommandContext context, string[] args)
     {
+        var state = context.Environment ??= context.EnvironmentRepository.Load();
+
         if (args.Length >= 3 && args[1] == "ask")
         {
-            var orchestrator = new AiOrchestrator(new AnthropicAiProvider(), engine);
+            var orchestrator = new AiOrchestrator(AiProviderFactory.Create(state), engine);
             var result = await orchestrator.AskAsync(args[2], context);
 
             Console.WriteLine(result.Message);
@@ -344,7 +350,7 @@ internal static class Program
 
         if (args.Length >= 4 && args[1] == "discover")
         {
-            var orchestrator = new AiOrchestrator(new AnthropicAiProvider(), engine);
+            var orchestrator = new AiOrchestrator(AiProviderFactory.Create(state), engine);
             var report = await orchestrator.DiscoverToolsAsync(args[2], args[3], context);
 
             PrintResultLine(report.Success, report.Message);
@@ -355,8 +361,33 @@ internal static class Program
             return report.Success ? 0 : 1;
         }
 
+        if (args.Length >= 2 && args[1] == "serve")
+        {
+            var cmdArgs = new Dictionary<string, string>();
+            ApplyOption(args, "--base-url", "baseUrl", cmdArgs);
+
+            var serveResult = engine.Execute("ollama.serve", context, cmdArgs);
+            PrintCommandResult(serveResult);
+            if (!serveResult.Success)
+            {
+                return 1;
+            }
+
+            var modelIndex = Array.IndexOf(args, "--model");
+            if (modelIndex >= 0 && modelIndex + 1 < args.Length)
+            {
+                var pullArgs = new Dictionary<string, string>(cmdArgs) { ["model"] = args[modelIndex + 1] };
+                var pullResult = engine.Execute("ollama.pull", context, pullArgs);
+                PrintCommandResult(pullResult);
+                return pullResult.Success ? 0 : 1;
+            }
+
+            return 0;
+        }
+
         Console.Error.WriteLine("Usage: endo ai ask \"<request>\"");
         Console.Error.WriteLine("       endo ai discover <Category> <SubCategory>");
+        Console.Error.WriteLine("       endo ai serve [--model <name>] [--base-url <url>]");
         return 1;
     }
 
@@ -435,7 +466,7 @@ internal static class Program
           endo project open <Category/SubCategory/Name> [--ide <ide>]
           endo tool list
           endo tool info <name> [--scope Category/SubCategory]
-          endo tool install <name> --repo <url> [--ref <ref>] [--version <v>] [--scope Category/SubCategory] [--build <cmd>] [--validate <cmd>]
+          endo tool install <name> (--repo <url> | --release <url>) [--ref <ref>] [--version <v>] [--scope Category/SubCategory] [--build <cmd>] [--validate <cmd>]
           endo tool remove <name> [--scope Category/SubCategory] [--version v] [--force]
           endo runtime list
           endo runtime install <name> <version> --path <path>
@@ -443,6 +474,7 @@ internal static class Program
           endo devrepo checkpoint [--message <msg>]
           endo ai ask "<request>"
           endo ai discover <Category> <SubCategory>
+          endo ai serve [--model <name>] [--base-url <url>]
           endo update check
         """);
     }

@@ -1,6 +1,6 @@
 namespace Endo.Core.Commands;
 
-public sealed record CommandDescriptor(string Name, string Description);
+public sealed record CommandDescriptor(string Name, string Description, IReadOnlyList<string> Parameters);
 
 /// <summary>
 /// The single dispatch point for every deterministic Endo operation. Both the CLI (Endo.Cli) and
@@ -22,7 +22,7 @@ public sealed class CommandEngine
     /// <summary>Exposed so the AI layer can know the actual command set instead of inventing commands (06-AI-SPEC.md "CLI Knowledge").</summary>
     public IReadOnlyList<CommandDescriptor> ListCommands() =>
         _commands.Values
-            .Select(c => new CommandDescriptor(c.Name, c.Description))
+            .Select(c => new CommandDescriptor(c.Name, c.Description, c.Parameters))
             .OrderBy(d => d.Name, StringComparer.Ordinal)
             .ToList();
 

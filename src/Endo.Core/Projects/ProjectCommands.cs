@@ -11,6 +11,7 @@ public sealed class ProjectNewCommand : ICommand
 
     public string Name => "project.new";
     public string Description => "Create a new project at Projects/<Category>/<SubCategory>/<ProjectName>, with its own Git repository, .agents/, and project.json.";
+    public IReadOnlyList<string> Parameters => ["category", "subCategory", "name"];
 
     public CommandResult Execute(CommandContext context, IReadOnlyDictionary<string, string> args)
     {
@@ -49,6 +50,7 @@ public sealed class ProjectCheckCommand : ICommand
 
     public string Name => "project.check";
     public string Description => "Validate a registered project's directory, project.json, and Git repository against environment.json.";
+    public IReadOnlyList<string> Parameters => ["key"]; // key is "Category/SubCategory/Name"
 
     public CommandResult Execute(CommandContext context, IReadOnlyDictionary<string, string> args)
     {
@@ -76,6 +78,7 @@ public sealed class ProjectOpenCommand : ICommand
 
     public string Name => "project.open";
     public string Description => "Open a project directory. Uses the project's configured IDE by default; --ide overrides for this operation only.";
+    public IReadOnlyList<string> Parameters => ["key", "ide"]; // key is "Category/SubCategory/Name"; ide is optional
 
     public CommandResult Execute(CommandContext context, IReadOnlyDictionary<string, string> args)
     {

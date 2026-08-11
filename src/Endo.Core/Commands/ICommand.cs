@@ -32,5 +32,14 @@ public interface ICommand
     /// <summary>Human/AI-readable description of what this command does, used for CLI knowledge (06-AI-SPEC.md).</summary>
     string Description { get; }
 
+    /// <summary>
+    /// The exact <c>args</c> dictionary keys this command reads. Exposed so the AI system prompt
+    /// can state real parameter names instead of the model guessing them from
+    /// <see cref="Description"/>'s prose (e.g. inferring "Category"/"ProjectName" from a
+    /// human-readable sentence when the command actually reads "category"/"name") — 06-AI-SPEC.md
+    /// "CLI Knowledge": the AI should use the actual command definitions, not invent them.
+    /// </summary>
+    IReadOnlyList<string> Parameters { get; }
+
     CommandResult Execute(CommandContext context, IReadOnlyDictionary<string, string> args);
 }

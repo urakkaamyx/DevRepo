@@ -34,7 +34,7 @@ public sealed class AiOrchestrator
         var catalog = _commandEngine.ListCommands();
         var systemPrompt = BuildSystemPrompt(catalog);
 
-        var response = await _provider.CompleteAsync(new AiCompletionRequest(systemPrompt, naturalLanguageRequest), cancellationToken);
+        var response = await _provider.CompleteAsync(new AiCompletionRequest(systemPrompt, naturalLanguageRequest, ForceJsonOutput: true), cancellationToken);
 
         if (!response.Available)
         {
@@ -92,7 +92,7 @@ public sealed class AiOrchestrator
         var userPrompt = $"Find modding tools for: {category} / {subCategory}";
 
         var response = await _provider.CompleteAsync(
-            new AiCompletionRequest(systemPrompt, userPrompt, EnableWebSearch: true, MaxTokens: 4096),
+            new AiCompletionRequest(systemPrompt, userPrompt, EnableWebSearch: true, MaxTokens: 4096, ForceJsonOutput: true),
             cancellationToken);
 
         if (!response.Available)
@@ -103,9 +103,16 @@ public sealed class AiOrchestrator
         List<DiscoveredToolCandidate>? candidates;
         try
         {
-            var json = ExtractJsonArray(response.Text ?? string.Empty);
-            candidates = JsonSerializer.Deserialize<List<DiscoveredToolCandidate>>(json,
-                new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+            var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+            var text = (response.Text ?? string.Empty).Trim();
+
+            // Providers asked for "a JSON array" sometimes return a single JSON object instead —
+            // observed in practice with smaller local models under constrained ("format: json")
+            // decoding, which guarantees valid JSON but not the specific top-level shape asked
+            // for. Treat a bare object as a one-candidate result rather than failing outright.
+            candidates = text.StartsWith('{')
+                ? [JsonSerializer.Deserialize<DiscoveredToolCandidate>(text, jsonOptions)!]
+                : JsonSerializer.Deserialize<List<DiscoveredToolCandidate>>(ExtractJsonArray(text), jsonOptions);
         }
         catch (JsonException ex)
         {
@@ -161,8 +168,10 @@ public sealed class AiOrchestrator
 
     private static string BuildSystemPrompt(IReadOnlyList<CommandDescriptor> catalog)
     {
-        var lines = catalog.Select(c => $"- {c.Name}: {c.Description}");
-        return "You are Endo AI. You may only invoke commands from this exact list — never invent a command name:\n" +
+        var lines = catalog.Select(c =>
+            $"- {c.Name}({string.Join(", ", c.Parameters)}): {c.Description}");
+        return "You are Endo AI. You may only invoke commands from this exact list — never invent a command name, " +
+               "and put args under exactly the parameter names shown in parentheses (case-sensitive, e.g. \"category\" not \"Category\") — never rename or invent argument keys:\n" +
                string.Join("\n", lines) +
                "\n\nRespond with JSON: {\"command\": \"<name-or-null>\", \"args\": {...}, \"clarification\": \"<if you cannot proceed>\"}.";
     }

@@ -11,6 +11,7 @@ public sealed class RestoreCommand : ICommand
 
     public string Name => "restore";
     public string Description => "Reconcile environment.json against the actual machine. scope=all|projects|tools|runtimes.";
+    public IReadOnlyList<string> Parameters => ["scope"];
 
     public CommandResult Execute(CommandContext context, IReadOnlyDictionary<string, string> args)
     {

@@ -12,7 +12,8 @@ public sealed record SetupAnswers(
     string Workspace,
     bool InitDevRepo,
     string? AiProvider,
-    bool AutoCheckUpdates);
+    bool AutoCheckUpdates,
+    string? AiModel = null);
 
 /// <summary>
 /// Implements `endo setup` per 02-CLI-SPEC.md: establishes managed root, workspace location,
@@ -52,12 +53,17 @@ public sealed class SetupService
         var initDevRepo = prompts.Confirm($"Initialize a private DevRepo Git repository at '{devRepoPath}'?", true);
 
         // 4. AI configuration.
-        var aiProvider = prompts.Prompt("AI provider (leave blank to configure later)", "");
+        var aiProvider = prompts.Prompt("AI provider — anthropic, ollama, or leave blank to configure later", "");
+        string? aiModel = null;
+        if (aiProvider.Trim().Equals("ollama", StringComparison.OrdinalIgnoreCase))
+        {
+            aiModel = prompts.Prompt("Ollama model to use", "llama3.2");
+        }
 
         // 5. Update preferences.
         var autoCheckUpdates = prompts.Confirm("Automatically check for Endo updates?", true);
 
-        return Apply(new SetupAnswers(root, workspace, initDevRepo, aiProvider, autoCheckUpdates));
+        return Apply(new SetupAnswers(root, workspace, initDevRepo, aiProvider, autoCheckUpdates, aiModel));
     }
 
     /// <summary>Deterministic setup core — the part an AI-orchestrated `setup` command actually runs.</summary>
@@ -136,6 +142,11 @@ public sealed class SetupService
         if (!string.IsNullOrWhiteSpace(answers.AiProvider))
         {
             state.Ai["provider"] = JsonValue.Create(answers.AiProvider);
+        }
+
+        if (!string.IsNullOrWhiteSpace(answers.AiModel))
+        {
+            state.Ai["model"] = JsonValue.Create(answers.AiModel);
         }
 
         state.Updates.AutoCheck = answers.AutoCheckUpdates;

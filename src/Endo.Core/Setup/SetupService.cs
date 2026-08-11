@@ -53,11 +53,15 @@ public sealed class SetupService
         var initDevRepo = prompts.Confirm($"Initialize a private DevRepo Git repository at '{devRepoPath}'?", true);
 
         // 4. AI configuration.
-        var aiProvider = prompts.Prompt("AI provider — anthropic, ollama, or leave blank to configure later", "");
+        var aiProvider = prompts.Prompt("AI provider — anthropic, claude-cli, ollama, or leave blank to configure later", "");
         string? aiModel = null;
         if (aiProvider.Trim().Equals("ollama", StringComparison.OrdinalIgnoreCase))
         {
             aiModel = prompts.Prompt("Ollama model to use", "llama3.2");
+        }
+        else if (aiProvider.Trim().Equals("claude-cli", StringComparison.OrdinalIgnoreCase))
+        {
+            aiModel = prompts.Prompt("Model override for the claude CLI (leave blank to use its own default)", "");
         }
 
         // 5. Update preferences.

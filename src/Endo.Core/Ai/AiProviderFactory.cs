@@ -7,10 +7,10 @@ namespace Endo.Core.Ai;
 /// Builds the configured <see cref="IAiProvider"/> from environment.json's <c>ai</c> section —
 /// provider name, and provider-specific non-secret config (model, base URL). Nothing here is a
 /// secret; credentials still never touch environment.json (06-AI-SPEC.md "Security") — they come
-/// from each provider's own resolution (env vars / OAuth profile for Anthropic; none needed for a
-/// local Ollama server). An unset or unrecognized provider resolves to <see cref="NullAiProvider"/>
-/// — honestly "not configured" rather than silently assuming a default provider the user never
-/// chose.
+/// from each provider's own resolution (env vars / OAuth profile for Anthropic; the already-logged
+/// in `claude` CLI session for claude-cli; none needed for a local Ollama server). An unset or
+/// unrecognized provider resolves to <see cref="NullAiProvider"/> — honestly "not configured"
+/// rather than silently assuming a default provider the user never chose.
 /// </summary>
 public static class AiProviderFactory
 {
@@ -20,7 +20,8 @@ public static class AiProviderFactory
 
         return provider switch
         {
-            "anthropic" or "claude" => new AnthropicAiProvider(),
+            "anthropic" => new AnthropicAiProvider(),
+            "claude-cli" => new ClaudeCliAiProvider(model: GetString(state.Ai, "model")),
             "ollama" => new OllamaAiProvider(
                 GetString(state.Ai, "baseUrl") ?? "http://127.0.0.1:11434",
                 GetString(state.Ai, "model") ?? "llama3.2"),

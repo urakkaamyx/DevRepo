@@ -27,7 +27,7 @@ build/
     Endo.Cli/    — argument parsing, interactive prompts, dispatch to CommandEngine
     Endo.Core/   — everything else, organized by roadmap phase (see below)
   tests/
-    Endo.Core.Tests/  — 46 xUnit tests, all passing
+    Endo.Core.Tests/  — 48 xUnit tests, all passing
 ```
 
 `Endo.Core` is deliberately one assembly with feature-folder namespaces
@@ -153,17 +153,19 @@ that surfaced it.
   instructions out of it, so discovered candidates install with no `--build`/`--validate` command
   unless a human adds one afterward. Validation in that case falls back to "clone + checkout
   succeeded," which is honest but shallower than the spec's full intent.
-- **Verified live** against a real local model (`endo ai discover GameModding Skyrim` under
-  Ollama/llama3.2): the candidate-loop, JSON parsing, and `tool.install` wiring all ran for real.
-  The model (no real web search available to it locally) recalled a plausible tool name
-  ("TES5Edit") from training data with a repository URL that doesn't actually resolve — `git
-  clone` failed, and the discovery report correctly showed `0/1 candidate(s) validated and
-  registered`. This is exactly the intended safety property working: a name without a real,
-  clonable repository never becomes a registered tool, regardless of how confidently the model
-  stated it. **Not yet verified**: a live round-trip against Claude specifically (which does have
-  real web search via `EnableWebSearch`), for the same credential-availability reason as the rest
-  of Phase 8.
-- Fixed during that live test: the response parser only accepted a top-level JSON array, but a
+- **Verified live twice, with two very different outcomes that both prove the design correct:**
+  - Under Ollama/llama3.2 (no real web search available locally): the model recalled a plausible
+    tool name ("TES5Edit") from training data with a repository URL that doesn't actually resolve
+    — `git clone` failed, and the report correctly showed `0/1 candidate(s) validated and
+    registered`. A name without a real, clonable repository never becomes a registered tool, no
+    matter how confidently the model stated it.
+  - Under `claude-cli` (real `WebSearch`/`WebFetch`, see Phase 8): `endo ai discover GameModding
+    Skyrim` had Claude actually search the web and GitHub, and returned 5 real, currently-relevant
+    Skyrim modding tools (Mod Organizer 2, LOOT, xEdit, CommonLibSSE-NG, Wrye Bash) with correct
+    repository URLs — **all 5 cloned, validated, and registered successfully**
+    (`Discovery complete: 5/5 candidate(s) validated and registered`). This is the complete
+    05-TOOL-SYSTEM-SPEC.md "Unknown Games" flow working end-to-end for real, not a simulation.
+- Fixed during the Ollama test: the response parser only accepted a top-level JSON array, but a
   provider asked for "a JSON array" sometimes returns a single JSON object instead (observed with
   Ollama's constrained `format: "json"` decoding, which guarantees valid JSON but not the specific
   shape requested). `DiscoverToolsAsync` now accepts a bare object as a one-candidate result.
@@ -202,7 +204,7 @@ that surfaced it.
   re-run `tool install`/`runtime install`; it does not silently re-fetch, since re-fetching a tool
   is itself the validated install pipeline, not a restore-time side effect.
 
-### Phase 8 — AI: **Implemented with two real providers — one fully verified live**
+### Phase 8 — AI: **Implemented with three real providers — two fully verified live**
 - `IAiProvider` / `AiCompletionRequest` / `AiCompletionResponse`: the provider-neutral contract.
   Request carries three provider hints, each optional and ignorable: `EnableWebSearch`,
   `MaxTokens`, `ForceJsonOutput` (ask the provider to constrain decoding to valid JSON where it
@@ -237,6 +239,35 @@ that surfaced it.
      what led to the `ForceJsonOutput` hint and the `ICommand.Parameters` fix above; after both
      fixes, `llama3.2` completed the full loop correctly.
   4. `endo ai discover GameModding Skyrim` — see Phase 5 above for that result.
+- **`ClaudeCliAiProvider`** (`Endo.Core/Ai/ClaudeCliAiProvider.cs`): third provider, added on
+  explicit request — the user already runs `claude` interactively from PowerShell and wanted that
+  exact login reused as an Endo AI provider, without `ant` and without managing an API key at all.
+  Shells out to the `claude` CLI itself in headless mode (`-p --output-format json
+  --no-session-persistence`), which resolves auth from whatever session/keychain the CLI already
+  has — nothing provider-specific to configure. Closes stdin immediately after starting the
+  process (confirmed by direct testing that otherwise the CLI waits ~3s deciding whether piped
+  input is coming). `EnableWebSearch` maps to `--tools WebSearch,WebFetch` (vs. `--tools ""` for a
+  pure headless completion with no tool use at all).
+  **Fully verified live, both operations, on the first real attempt after one fix**:
+  - `endo ai ask "Create a new project called MyMod under GameModding for Skyrim"` worked
+    correctly immediately — right command, right argument keys, real project created on disk.
+  - `endo ai discover GameModding Skyrim` initially returned nothing: the CLI's headless mode has
+    no TTY to approve a permission prompt, so `WebSearch`/`WebFetch` calls were silently blocked
+    (`permission_denials` in the raw JSON output) even though `--tools` had allowed them — and
+    Claude correctly refused to invent repository URLs rather than fake a result, exactly per
+    instructions. Fixed by adding `--permission-mode bypassPermissions`, scoped safely because
+    `--tools` already restricts what that bypass can reach (only the two read-only search tools,
+    never Bash/Write/Edit). After the fix: 5 real, current Skyrim modding tools found via genuine
+    web search, all 5 cloned/validated/registered — see Phase 5 above.
+  - **Cost/latency caveat, found directly**: `claude -p` is the full Claude Code harness, not a
+    bare completion — every call incurs its own baseline system-prompt overhead (~16k
+    cache-creation tokens observed even from a neutral directory with no CLAUDE.md) on top of
+    whatever Endo's own request costs. `--bare` mode would cut this significantly but only accepts
+    `ANTHROPIC_API_KEY`/`apiKeyHelper` auth — never OAuth or keychain — which would defeat the
+    entire point of this provider, so it's deliberately not used. This makes `claude-cli` the
+    right choice when "reuse my existing login, zero setup" matters more than per-call cost/
+    latency; `AnthropicAiProvider` (once a credential is available to test it) should be cheaper
+    per call for high-volume use.
 - **`OllamaServerManager`** (`Endo.Core/Ai/OllamaServerManager.cs`) + `ollama.serve`/`ollama.pull`
   commands: starts the workspace Ollama binary as a detached background process only if nothing is
   already responding at the configured address (never assumes a fixed startup delay — polls),
@@ -248,15 +279,15 @@ that surfaced it.
   stop both. There is currently no `endo ai stop` command at all; this should be added alongside
   fixing the shutdown behavior.
 - **`AiProviderFactory`** (`Endo.Core/Ai/AiProviderFactory.cs`): builds the active provider from
-  `environment.json`'s `ai.provider` (+ `ai.model`, `ai.baseUrl` for Ollama) instead of the CLI
-  hardcoding Anthropic. An unset/unrecognized provider resolves to `NullAiProvider` — honestly "not
-  configured" rather than silently defaulting to a provider the user never chose. `endo setup`'s
-  interactive AI-provider prompt now accepts `ollama` and, if chosen, asks for a model name
-  (default suggestion `llama3.2`); the deterministic `setup` command accepts the same via
-  `aiProvider`/`aiModel` args. There is currently no way to *change* the configured provider after
-  initial setup short of re-running `endo setup` (which asks to confirm overwriting the existing
-  config) or hand-editing `environment.json` — a dedicated `endo config set ai.provider ollama`
-  verb would be a reasonable follow-up.
+  `environment.json`'s `ai.provider` (`anthropic` | `claude-cli` | `ollama`) plus `ai.model` /
+  `ai.baseUrl` where relevant, instead of the CLI hardcoding one provider. An unset/unrecognized
+  provider resolves to `NullAiProvider` — honestly "not configured" rather than silently defaulting
+  to a provider the user never chose. `endo setup`'s interactive AI-provider prompt accepts all
+  three and, for `ollama`/`claude-cli`, asks for a model name; the deterministic `setup` command
+  accepts the same via `aiProvider`/`aiModel` args. There is currently no way to *change* the
+  configured provider after initial setup short of re-running `endo setup` (which asks to confirm
+  overwriting the existing config) or hand-editing `environment.json` — a dedicated
+  `endo config set ai.provider ollama` verb would be a reasonable follow-up.
 - `NullAiProvider`: kept as an explicit "no provider" option and as the honest-failure reference
   implementation.
 - `AiOrchestrator`: sends only the command *catalog* to the provider — now name, description,
@@ -296,7 +327,7 @@ that surfaced it.
   system" the spec explicitly warns against re-inventing at the container layer.
 
 ### Phase 10 — Hardening: **Partially covered, substantially expanded this session**
-Covered by the test suite (46 tests): interrupted/invalid atomic writes, missing environment.json,
+Covered by the test suite (48 tests): interrupted/invalid atomic writes, missing environment.json,
 missing project directories (drift), unknown commands, empty DevRepo checkpoints, plus:
 - Interrupted/failed build mid-`ToolService.Install` (`ToolServiceHardeningTests`): a failing build
   command leaves Scratchpad evidence in place, registers nothing, and records the bounded-retry
@@ -316,26 +347,31 @@ missing project directories (drift), unknown commands, empty DevRepo checkpoints
   deterministically, independent of live model behavior — with `CommandResult` staying `null`
   (nothing executed) and the refusal message naming the invented command. A stub returning
   non-JSON garbage also fails cleanly rather than throwing. **This property was then also proven
-  against a real model**, not just a stub: see Phase 5/8 above — a live local model recalled a
-  plausible-sounding but non-existent tool repository, and the deterministic install pipeline's
-  actual clone attempt (not any AI-side check) is what caught it and prevented registration.
-- The real Dev Container build/run (Phase 9) and the real Ollama install/serve/pull/ask loop
-  (Phase 8) are themselves hardening exercises — cross-platform behavior (Linux container) and a
-  full live AI round-trip (impossible to test against Anthropic in this sandbox) were both
-  previously unverified.
+  against two real models**, not just a stub: see Phase 5/8 above — a live local Ollama model
+  recalled a plausible-sounding but non-existent tool repository, and the deterministic install
+  pipeline's actual clone attempt (not any AI-side check) is what caught it and prevented
+  registration; separately, `claude-cli`'s headless permission denial produced a case where Claude
+  itself refused to invent a repository URL when it genuinely couldn't verify one via search.
+- The real Dev Container build/run (Phase 9) and the real Ollama and claude-cli install/serve/
+  ask/discover loops (Phase 8) are themselves hardening exercises — cross-platform behavior (Linux
+  container) and full live AI round-trips (impossible to test against the raw Anthropic SDK in
+  this sandbox, but fully achievable via claude-cli) were both previously unverified.
 
 Still not covered: full offline operation *beyond* the unreachable-repository/URL cases above (no
 systematic "disconnect every network-touching path" sweep); retry-loop prevention beyond the
 Phase 4 bounded-retry (no cyclic self-referential task instructions exist yet to test against,
-since the 08-WORKFLOW-SPEC.md workflow engine isn't built); a live round-trip against Claude
-specifically (Ollama closed the "live model" gap in general, but the Anthropic path itself is
-still only verified for its no-credential failure path).
+since the 08-WORKFLOW-SPEC.md workflow engine isn't built); a live round-trip against the raw
+Anthropic SDK path specifically (`claude-cli` closed the "live Claude" gap in general — both
+`ai ask` and `ai discover` are now proven against real Claude responses — but `AnthropicAiProvider`
+itself, which talks to the API directly rather than through the CLI, is still only verified for
+its no-credential failure path).
 
 ## What a next session should pick up first
 
-1. Exercise `endo ai ask` and `endo ai discover` under a real Claude credential (`ant auth login`)
-   — the Ollama path is now fully proven live; Anthropic's only verified path is still the
-   no-credential failure case.
+1. Exercise `AnthropicAiProvider` (the raw SDK path, not `claude-cli`) under a real
+   `ANTHROPIC_API_KEY` or `ant auth login` credential — `claude-cli` already proved the underlying
+   `ai ask`/`ai discover` logic works correctly against real Claude, but the direct-SDK provider
+   itself remains unverified beyond its no-credential failure path.
 2. Fix Ollama shutdown: `endo ai serve` starts `ollama.exe`, which spawns a `llama-server.exe`
    child that isn't stopped when the parent is. Add an `endo ai stop` command that stops both.
 3. Add a way to change AI provider/model after initial setup without re-running the whole

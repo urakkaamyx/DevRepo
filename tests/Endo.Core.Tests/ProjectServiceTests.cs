@@ -122,4 +122,69 @@ public sealed class ProjectServiceTests : IDisposable
 
         Assert.Null(ide);
     }
+
+    [Fact]
+    public void CreateProject_NoTemplate_CreatesNoScaffoldFiles()
+    {
+        var result = _service.CreateProject(_state, "GameModding", "Skyrim", "MyMod");
+
+        var projectPath = result.Project!.Paths.Root;
+        Assert.Empty(Directory.EnumerateFiles(projectPath, "*.sln*"));
+    }
+
+    [Fact]
+    public void CreateProject_DotNetClassLibTemplate_ScaffoldsSlnAndCsproj()
+    {
+        var result = _service.CreateProject(_state, "GameModding", "Skyrim", "MyMod", template: ProjectTemplates.DotNetClassLib);
+
+        Assert.True(result.Success, string.Join("; ", result.Diagnostics));
+        var projectPath = result.Project!.Paths.Root;
+        Assert.True(File.Exists(Path.Combine(projectPath, "MyMod.slnx")) || File.Exists(Path.Combine(projectPath, "MyMod.sln")));
+        Assert.True(File.Exists(Path.Combine(projectPath, "MyMod", "MyMod.csproj")));
+        Assert.Equal("dotnet-classlib", result.Project.Metadata["template"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void CreateProject_UnknownTemplate_StillCreatesProjectButReportsDiagnostic()
+    {
+        var result = _service.CreateProject(_state, "GameModding", "Skyrim", "MyMod", template: "not-a-real-template");
+
+        Assert.True(result.Success);
+        Assert.Contains(result.Diagnostics, d => d.Contains("Unknown template"));
+        Assert.True(_state.Projects.ContainsKey("GameModding/Skyrim/MyMod"));
+    }
+
+    [Fact]
+    public void CreateProject_AlwaysScaffoldsBootstrapFile_RegardlessOfTemplate()
+    {
+        var result = _service.CreateProject(_state, "GameModding", "Skyrim", "MyMod");
+
+        var bootstrapPath = Path.Combine(result.Project!.Paths.Root, "docs", "Bootstrap", ProjectBootstrap.FileName);
+        Assert.True(File.Exists(bootstrapPath));
+    }
+
+    [Fact]
+    public void ReadSpec_StillPlaceholder_ReportsNotFilledIn()
+    {
+        var result = _service.CreateProject(_state, "GameModding", "Skyrim", "MyMod");
+
+        var (ok, message, content) = ProjectBootstrap.ReadSpec(result.Project!.Paths.Root);
+
+        Assert.False(ok);
+        Assert.Contains("placeholder", message);
+        Assert.Null(content);
+    }
+
+    [Fact]
+    public void ReadSpec_FilledIn_ReturnsContent()
+    {
+        var result = _service.CreateProject(_state, "GameModding", "Skyrim", "MyMod");
+        var bootstrapPath = Path.Combine(result.Project!.Paths.Root, "docs", "Bootstrap", ProjectBootstrap.FileName);
+        File.WriteAllText(bootstrapPath, "Build a companion tracker for Scrap Mechanic.");
+
+        var (ok, _, content) = ProjectBootstrap.ReadSpec(result.Project!.Paths.Root);
+
+        Assert.True(ok);
+        Assert.Equal("Build a companion tracker for Scrap Mechanic.", content);
+    }
 }

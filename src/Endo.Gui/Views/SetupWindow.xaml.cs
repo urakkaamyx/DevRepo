@@ -29,15 +29,21 @@ public partial class SetupWindow : Window
         // fires SelectionChanged mid-parse, before ClaudeCliPanel and the other named fields below
         // it in the visual tree have been assigned yet, which crashed with a NullReferenceException.
         ProviderCombo.SelectedIndex = 0;
+        BuilderProviderCombo.SelectedIndex = 0;
     }
 
     private string? SelectedProvider() => (ProviderCombo.SelectedItem as ComboBoxItem)?.Tag as string;
+    private string? SelectedBuilderProvider() => (BuilderProviderCombo.SelectedItem as ComboBoxItem)?.Tag as string;
 
-    private void ProviderCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private void ProviderCombo_SelectionChanged(object sender, SelectionChangedEventArgs e) => UpdateClaudeCliPanelVisibility();
+    private void BuilderProviderCombo_SelectionChanged(object sender, SelectionChangedEventArgs e) => UpdateClaudeCliPanelVisibility();
+
+    /// <summary>Either role choosing claude-cli is enough reason to show the shared install/login panel — it's the same CLI session either way.</summary>
+    private void UpdateClaudeCliPanelVisibility()
     {
-        var isClaudeCli = SelectedProvider() == "claude-cli";
-        ClaudeCliPanel.Visibility = isClaudeCli ? Visibility.Visible : Visibility.Collapsed;
-        if (isClaudeCli)
+        var needsClaudeCli = SelectedProvider() == "claude-cli" || SelectedBuilderProvider() == "claude-cli";
+        ClaudeCliPanel.Visibility = needsClaudeCli ? Visibility.Visible : Visibility.Collapsed;
+        if (needsClaudeCli)
         {
             RefreshClaudeCliStatus();
         }
@@ -97,6 +103,8 @@ public partial class SetupWindow : Window
 
         var provider = SelectedProvider();
         var model = ModelBox.Text.Trim();
+        var builderProvider = SelectedBuilderProvider();
+        var builderModel = BuilderModelBox.Text.Trim();
 
         var setupService = new SetupService(_claudeCliInstaller);
         var result = setupService.Apply(new SetupAnswers(
@@ -105,7 +113,9 @@ public partial class SetupWindow : Window
             DevRepoCheck.IsChecked == true,
             string.IsNullOrWhiteSpace(provider) ? null : provider,
             AutoUpdateCheck.IsChecked == true,
-            string.IsNullOrWhiteSpace(model) ? null : model));
+            string.IsNullOrWhiteSpace(model) ? null : model,
+            string.IsNullOrWhiteSpace(builderProvider) ? null : builderProvider,
+            string.IsNullOrWhiteSpace(builderModel) ? null : builderModel));
 
         if (!result.Success)
         {

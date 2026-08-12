@@ -20,6 +20,10 @@ public static class ShellProcess
         psi.RedirectStandardError = true;
         psi.UseShellExecute = false;
         psi.CreateNoWindow = true;
+        // Without this, .NET reads the child's stdout/stderr using the console codepage rather
+        // than UTF-8 on Windows, mangling any non-ASCII output most modern build tools emit.
+        psi.StandardOutputEncoding = Encoding.UTF8;
+        psi.StandardErrorEncoding = Encoding.UTF8;
 
         using var process = new Process { StartInfo = psi };
 

@@ -195,13 +195,17 @@ public sealed class ToolService
     /// <summary>
     /// Release/archive fallback acquisition (05-TOOL-SYSTEM-SPEC.md "Source-First Acquisition":
     /// "Release/archive fallback is allowed when source is unavailable or unsuitable"). Downloads
-    /// a zip archive and extracts it directly into the Scratchpad root — same disposable staging
-    /// area the git-clone path uses, so a failure here leaves the same kind of evidence behind.
+    /// the release asset into the Scratchpad root — same disposable staging area the git-clone
+    /// path uses, so a failure here leaves the same kind of evidence behind. Not every release
+    /// asset is a zip (e.g. a standalone installer .exe); the download is sniffed for the zip
+    /// magic number and only extracted if it actually is one, otherwise kept as a raw file under
+    /// its own name.
     /// </summary>
     private static bool AcquireRelease(string url, string destinationPath, ToolInstallReport report)
     {
         Directory.CreateDirectory(destinationPath);
-        var archivePath = destinationPath + ".download.zip";
+        var downloadPath = destinationPath + ".download.tmp";
+        string? fileName;
 
         try
         {
@@ -213,7 +217,11 @@ public sealed class ToolService
                 return false;
             }
 
-            using (var fileStream = new FileStream(archivePath, FileMode.Create, FileAccess.Write))
+            fileName = response.Content.Headers.ContentDisposition?.FileNameStar?.Trim('"')
+                ?? response.Content.Headers.ContentDisposition?.FileName?.Trim('"')
+                ?? Path.GetFileName(new Uri(url).LocalPath);
+
+            using (var fileStream = new FileStream(downloadPath, FileMode.Create, FileAccess.Write))
             {
                 response.Content.CopyToAsync(fileStream).GetAwaiter().GetResult();
             }
@@ -228,8 +236,17 @@ public sealed class ToolService
 
         try
         {
-            ZipFile.ExtractToDirectory(archivePath, destinationPath, overwriteFiles: true);
-            report.StepsSucceeded.Add("extract archive");
+            if (IsZipFile(downloadPath))
+            {
+                ZipFile.ExtractToDirectory(downloadPath, destinationPath, overwriteFiles: true);
+                report.StepsSucceeded.Add("extract archive");
+            }
+            else
+            {
+                var targetName = string.IsNullOrWhiteSpace(fileName) ? "download.bin" : fileName;
+                File.Copy(downloadPath, Path.Combine(destinationPath, targetName), overwrite: true);
+                report.StepsSucceeded.Add($"save release asset '{targetName}' (not an archive)");
+            }
             return true;
         }
         catch (Exception ex)
@@ -240,8 +257,22 @@ public sealed class ToolService
         }
         finally
         {
-            try { if (File.Exists(archivePath)) File.Delete(archivePath); } catch { /* best-effort cleanup */ }
+            try { if (File.Exists(downloadPath)) File.Delete(downloadPath); } catch { /* best-effort cleanup */ }
         }
+    }
+
+    private static bool IsZipFile(string path)
+    {
+        using var stream = File.OpenRead(path);
+        if (stream.Length < 4)
+        {
+            return false;
+        }
+
+        Span<byte> header = stackalloc byte[4];
+        stream.ReadExactly(header);
+        // ZIP local-file-header / empty-archive / spanned-archive signatures all start with 'PK'.
+        return header[0] == 0x50 && header[1] == 0x4B;
     }
 
     private static bool RunWithBoundedRetry(string stepName, string command, string workingDirectory, ToolInstallReport report)

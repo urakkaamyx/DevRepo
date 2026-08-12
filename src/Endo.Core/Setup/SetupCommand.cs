@@ -14,8 +14,8 @@ public sealed class SetupCommand : ICommand
     public SetupCommand(SetupService setupService) => _setupService = setupService;
 
     public string Name => "setup";
-    public string Description => "Establish or update the Endo managed root, workspace location, DevRepo, AI provider, and update preferences.";
-    public IReadOnlyList<string> Parameters => ["root", "workspace", "initDevRepo", "aiProvider", "aiModel", "autoCheckUpdates"];
+    public string Description => "Establish or update the Endo managed root, workspace location, DevRepo, Orchestrator/Builder AI providers, and update preferences.";
+    public IReadOnlyList<string> Parameters => ["root", "workspace", "initDevRepo", "aiProvider", "aiModel", "builderProvider", "builderModel", "autoCheckUpdates"];
 
     public CommandResult Execute(CommandContext context, IReadOnlyDictionary<string, string> args)
     {
@@ -26,10 +26,12 @@ public sealed class SetupCommand : ICommand
 
         args.TryGetValue("aiProvider", out var aiProvider);
         args.TryGetValue("aiModel", out var aiModel);
+        args.TryGetValue("builderProvider", out var builderProvider);
+        args.TryGetValue("builderModel", out var builderModel);
         var initDevRepo = args.TryGetValue("initDevRepo", out var initDevRepoRaw) && bool.TryParse(initDevRepoRaw, out var parsedInit) && parsedInit;
         var autoCheckUpdates = !args.TryGetValue("autoCheckUpdates", out var autoCheckRaw) || !bool.TryParse(autoCheckRaw, out var parsedAuto) || parsedAuto;
 
-        var result = _setupService.Apply(new SetupAnswers(root, workspace, initDevRepo, aiProvider, autoCheckUpdates, aiModel));
+        var result = _setupService.Apply(new SetupAnswers(root, workspace, initDevRepo, aiProvider, autoCheckUpdates, aiModel, builderProvider, builderModel));
 
         return result.Success
             ? CommandResult.Ok(result.Message, changedFiles: result.ChangedFiles, diagnostics: result.Diagnostics)

@@ -159,7 +159,7 @@ public static class CliHost
     {
         if (args.Length < 2)
         {
-            Console.Error.WriteLine("Usage: endo project <new|check|open> ...");
+            Console.Error.WriteLine("Usage: endo project <new|check|open|bootstrap> ...");
             return 1;
         }
 
@@ -169,18 +169,31 @@ public static class CliHost
             {
                 string category, subCategory, name;
                 string? ide = null;
+                string? template = null;
                 string? runtimeChoice = null;
 
                 // Positional args = scriptable/automation usage: no prompts, matching 02-CLI-SPEC.md
                 // (ordinary CLI operation shouldn't gain unnecessary approval gates). Bare
                 // 'endo project new' is the guided path — mirrors the GUI's New Project dialog:
-                // IDE, runtime, and (for a new GameModding game) a tool-discovery checklist.
+                // IDE, template, runtime, and (for a new GameModding game) a tool-discovery checklist.
                 var interactive = args.Length < 5;
                 if (!interactive)
                 {
                     category = args[2];
                     subCategory = args[3];
                     name = args[4];
+
+                    var ideIndex = Array.IndexOf(args, "--ide");
+                    if (ideIndex >= 0 && ideIndex + 1 < args.Length)
+                    {
+                        ide = args[ideIndex + 1];
+                    }
+
+                    var templateIndex = Array.IndexOf(args, "--template");
+                    if (templateIndex >= 0 && templateIndex + 1 < args.Length)
+                    {
+                        template = args[templateIndex + 1];
+                    }
                 }
                 else
                 {
@@ -191,6 +204,9 @@ public static class CliHost
 
                     var ideAnswer = prompts.Prompt($"IDE (blank for none; known: {string.Join(", ", ProjectLauncher.KnownIdeAliases)})", "");
                     ide = string.IsNullOrWhiteSpace(ideAnswer) ? null : ideAnswer;
+
+                    var templateAnswer = prompts.Prompt($"Template (blank for an empty project; known: {string.Join(", ", ProjectTemplates.Known.Where(t => t != ProjectTemplates.None))})", "");
+                    template = string.IsNullOrWhiteSpace(templateAnswer) ? null : templateAnswer;
 
                     var state = context.Environment ??= context.EnvironmentRepository.Load();
                     if (state.Runtimes.Count > 0)
@@ -204,6 +220,10 @@ public static class CliHost
                 if (!string.IsNullOrWhiteSpace(ide))
                 {
                     projectArgs["ide"] = ide;
+                }
+                if (!string.IsNullOrWhiteSpace(template))
+                {
+                    projectArgs["template"] = template;
                 }
 
                 var result = engine.Execute("project.new", context, projectArgs);
@@ -255,6 +275,34 @@ public static class CliHost
                     cmdArgs["ide"] = args[ideIndex + 1];
                 }
                 var result = engine.Execute("project.open", context, cmdArgs);
+                PrintCommandResult(result);
+                return result.Success ? 0 : 1;
+            }
+            case "bootstrap":
+            {
+                if (args.Length < 3)
+                {
+                    Console.Error.WriteLine("Usage: endo project bootstrap <Category/SubCategory/Name> [--agent <agent>] [--skip-docs]");
+                    return 1;
+                }
+
+                var cmdArgs = new Dictionary<string, string> { ["key"] = args[2] };
+
+                var agentIndex = Array.IndexOf(args, "--agent");
+                var agent = agentIndex >= 0 && agentIndex + 1 < args.Length ? args[agentIndex + 1] : null;
+                if (string.IsNullOrWhiteSpace(agent))
+                {
+                    var answer = SetupPrompts.Console().Prompt($"Build agent (known: {string.Join(", ", ProjectBootstrap.KnownAgents)}; any other name on PATH also works)", "claude");
+                    agent = string.IsNullOrWhiteSpace(answer) ? "claude" : answer;
+                }
+                cmdArgs["agent"] = agent;
+
+                if (args.Contains("--skip-docs"))
+                {
+                    cmdArgs["skipDocs"] = "true";
+                }
+
+                var result = engine.Execute("project.bootstrap", context, cmdArgs);
                 PrintCommandResult(result);
                 return result.Success ? 0 : 1;
             }

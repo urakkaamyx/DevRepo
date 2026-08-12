@@ -16,7 +16,7 @@ public sealed class ProjectService
 {
     public static string ProjectKey(string category, string subCategory, string name) => $"{category}/{subCategory}/{name}";
 
-    public ProjectCreationResult CreateProject(EnvironmentState state, string category, string subCategory, string name, string? ide = null)
+    public ProjectCreationResult CreateProject(EnvironmentState state, string category, string subCategory, string name, string? ide = null, string? template = null)
     {
         var diagnostics = new List<string>();
         var changedFiles = new List<string>();
@@ -48,9 +48,23 @@ public sealed class ProjectService
         Directory.CreateDirectory(projectRoot);
         changedFiles.Add(projectRoot);
 
+        // Optional starter scaffold (e.g. a .sln + class library) -- explicit opt-in via
+        // 'template', never guessed from Category/IDE. Non-fatal: a failed scaffold (e.g. the
+        // .NET SDK isn't installed) still leaves a valid, registered project directory behind.
+        if (!string.IsNullOrWhiteSpace(template) && !template.Equals(ProjectTemplates.None, StringComparison.OrdinalIgnoreCase))
+        {
+            var scaffold = ProjectTemplates.Scaffold(template, projectRoot, name);
+            diagnostics.Add(scaffold.Message);
+            changedFiles.AddRange(scaffold.ChangedFiles);
+        }
+
         var agentsPath = Path.Combine(projectRoot, ".agents");
         Directory.CreateDirectory(agentsPath);
         changedFiles.Add(agentsPath);
+
+        // Every project gets a bootstrap spec slot, independent of 'template' — see ProjectBootstrap.
+        ProjectBootstrap.Scaffold(projectRoot, name);
+        changedFiles.Add(Path.Combine(projectRoot, "docs", "Bootstrap", ProjectBootstrap.FileName));
 
         // Every project maintains its own Git repository, independent from Endo's DevRepo (07-GIT-DEVREPO-SPEC.md).
         var gitInit = GitProcess.Run(projectRoot, "init");
@@ -66,6 +80,11 @@ public sealed class ProjectService
             Repository = new ProjectRepository { Type = "git", Remote = null },
             Ide = string.IsNullOrWhiteSpace(ide) ? null : ide,
         };
+
+        if (!string.IsNullOrWhiteSpace(template) && !template.Equals(ProjectTemplates.None, StringComparison.OrdinalIgnoreCase))
+        {
+            project.Metadata["template"] = System.Text.Json.Nodes.JsonValue.Create(template);
+        }
 
         var projectJsonPath = Path.Combine(projectRoot, "project.json");
         AtomicJsonWriter.Write(projectJsonPath, project);

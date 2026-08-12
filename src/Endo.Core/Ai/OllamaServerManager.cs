@@ -58,6 +58,8 @@ public sealed class OllamaServerManager
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
+            StandardOutputEncoding = System.Text.Encoding.UTF8,
+            StandardErrorEncoding = System.Text.Encoding.UTF8,
         };
         psi.ArgumentList.Add("serve");
         psi.Environment["OLLAMA_MODELS"] = _modelsDirectory;

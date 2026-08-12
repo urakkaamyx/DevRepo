@@ -21,10 +21,13 @@ public static class EndoCommandEngineFactory
     {
         var engine = new CommandEngine();
 
+        var claudeCliInstaller = new ClaudeCliInstaller();
+
         var projectService = new ProjectService();
         engine.Register(new ProjectNewCommand(projectService));
         engine.Register(new ProjectCheckCommand(projectService));
         engine.Register(new ProjectOpenCommand(projectService));
+        engine.Register(new ProjectBootstrapCommand(claudeCliInstaller));
 
         var toolService = new ToolService(root);
         engine.Register(new ToolListCommand(toolService));
@@ -48,7 +51,6 @@ public static class EndoCommandEngineFactory
         engine.Register(new OllamaServeCommand());
         engine.Register(new OllamaPullCommand());
 
-        var claudeCliInstaller = new ClaudeCliInstaller();
         engine.Register(new ClaudeCliStatusCommand(claudeCliInstaller));
         engine.Register(new ClaudeCliInstallCommand(claudeCliInstaller));
         engine.Register(new ClaudeCliLoginCommand(claudeCliInstaller));

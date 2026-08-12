@@ -21,6 +21,10 @@ public static class GitProcess
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
+            // Without this, .NET reads git's stdout/stderr using the console codepage rather than
+            // UTF-8 on Windows, mangling any non-ASCII byte (commit messages, file names, ...).
+            StandardOutputEncoding = System.Text.Encoding.UTF8,
+            StandardErrorEncoding = System.Text.Encoding.UTF8,
         };
 
         foreach (var arg in args)

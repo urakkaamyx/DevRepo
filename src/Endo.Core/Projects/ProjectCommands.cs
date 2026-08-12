@@ -10,8 +10,8 @@ public sealed class ProjectNewCommand : ICommand
     public ProjectNewCommand(ProjectService projectService) => _projectService = projectService;
 
     public string Name => "project.new";
-    public string Description => "Create a new project at Projects/<Category>/<SubCategory>/<ProjectName>, with its own Git repository, .agents/, and project.json. Optional 'ide' sets project.json's IDE preference at creation time.";
-    public IReadOnlyList<string> Parameters => ["category", "subCategory", "name", "ide"];
+    public string Description => $"Create a new project at Projects/<Category>/<SubCategory>/<ProjectName>, with its own Git repository, .agents/, and project.json. Optional 'ide' sets project.json's IDE preference at creation time. Optional 'template' scaffolds starter files (known: {string.Join(", ", ProjectTemplates.Known)}); leave blank/omit for an empty project.";
+    public IReadOnlyList<string> Parameters => ["category", "subCategory", "name", "ide", "template"];
 
     public CommandResult Execute(CommandContext context, IReadOnlyDictionary<string, string> args)
     {
@@ -25,8 +25,9 @@ public sealed class ProjectNewCommand : ICommand
         }
 
         args.TryGetValue("ide", out var ide);
+        args.TryGetValue("template", out var template);
 
-        var result = _projectService.CreateProject(state, category, subCategory, name, ide);
+        var result = _projectService.CreateProject(state, category, subCategory, name, ide, template);
         if (!result.Success)
         {
             return CommandResult.Fail(result.Message, diagnostics: result.Diagnostics);

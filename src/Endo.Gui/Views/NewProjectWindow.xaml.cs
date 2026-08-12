@@ -59,6 +59,11 @@ public partial class NewProjectWindow : Window
         IdeCombo.ItemsSource = ideOptions;
         IdeCombo.SelectedIndex = 0;
 
+        var templateOptions = new List<string> { "(none)" };
+        templateOptions.AddRange(ProjectTemplates.Known.Where(t => t != ProjectTemplates.None));
+        TemplateCombo.ItemsSource = templateOptions;
+        TemplateCombo.SelectedIndex = 0;
+
         if (state.Runtimes.Count == 0)
         {
             RuntimeLabel.Visibility = Visibility.Collapsed;
@@ -97,6 +102,12 @@ public partial class NewProjectWindow : Window
         if (!string.IsNullOrWhiteSpace(ide))
         {
             args["ide"] = ide;
+        }
+
+        var template = TemplateCombo.SelectedItem as string;
+        if (!string.IsNullOrWhiteSpace(template) && template != "(none)")
+        {
+            args["template"] = template;
         }
 
         var result = _commandEngine.Execute("project.new", _context, args);

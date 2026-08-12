@@ -14,7 +14,9 @@ public sealed record SetupAnswers(
     bool InitDevRepo,
     string? AiProvider,
     bool AutoCheckUpdates,
-    string? AiModel = null);
+    string? AiModel = null,
+    string? BuilderProvider = null,
+    string? BuilderModel = null);
 
 /// <summary>
 /// Implements `endo setup` per 02-CLI-SPEC.md: establishes managed root, workspace location,
@@ -61,23 +63,43 @@ public sealed class SetupService
         var devRepoPath = Path.Combine(root, "DevRepo");
         var initDevRepo = prompts.Confirm($"Initialize a private DevRepo Git repository at '{devRepoPath}'?", true);
 
-        // 4. AI configuration.
-        var aiProvider = prompts.Prompt("AI provider — anthropic, claude-cli, ollama, or leave blank to configure later", "");
+        // 4. AI configuration — two independent roles. Orchestrator is Endo AI proper (command
+        // dispatch, constrained to registered commands). Builder is free-form generation (e.g.
+        // turning a project's BOOTSTRAP.md into architecture docs) — same provider choices, but
+        // never routed through the command-only constraint, so it's configured separately.
+        var aiProvider = prompts.Prompt("Orchestrator AI provider — anthropic, claude-cli, ollama, or leave blank to configure later", "");
         string? aiModel = null;
+        var claudeCliBootstrapped = false;
         if (aiProvider.Trim().Equals("ollama", StringComparison.OrdinalIgnoreCase))
         {
-            aiModel = prompts.Prompt("Ollama model to use", "llama3.2");
+            aiModel = prompts.Prompt("Orchestrator: Ollama model to use", "llama3.2");
         }
         else if (aiProvider.Trim().Equals("claude-cli", StringComparison.OrdinalIgnoreCase))
         {
-            aiModel = prompts.Prompt("Model override for the claude CLI (leave blank to use its own default)", "");
+            aiModel = prompts.Prompt("Orchestrator: model override for the claude CLI (leave blank to use its own default)", "");
             BootstrapClaudeCli(prompts, setupDiagnostics);
+            claudeCliBootstrapped = true;
+        }
+
+        var builderProvider = prompts.Prompt("Builder AI provider (used to turn a project's BOOTSTRAP.md into architecture docs) — anthropic, claude-cli, ollama, or leave blank to configure later", "");
+        string? builderModel = null;
+        if (builderProvider.Trim().Equals("ollama", StringComparison.OrdinalIgnoreCase))
+        {
+            builderModel = prompts.Prompt("Builder: Ollama model to use", "llama3.2");
+        }
+        else if (builderProvider.Trim().Equals("claude-cli", StringComparison.OrdinalIgnoreCase))
+        {
+            builderModel = prompts.Prompt("Builder: model override for the claude CLI (leave blank to use its own default)", "");
+            if (!claudeCliBootstrapped)
+            {
+                BootstrapClaudeCli(prompts, setupDiagnostics);
+            }
         }
 
         // 5. Update preferences.
         var autoCheckUpdates = prompts.Confirm("Automatically check for Endo updates?", true);
 
-        var result = Apply(new SetupAnswers(root, workspace, initDevRepo, aiProvider, autoCheckUpdates, aiModel));
+        var result = Apply(new SetupAnswers(root, workspace, initDevRepo, aiProvider, autoCheckUpdates, aiModel, builderProvider, builderModel));
         return setupDiagnostics.Count == 0
             ? result
             : result with { Diagnostics = [.. setupDiagnostics, .. result.Diagnostics] };
@@ -202,15 +224,8 @@ public sealed class SetupService
             state = new EnvironmentState { Paths = paths };
         }
 
-        if (!string.IsNullOrWhiteSpace(answers.AiProvider))
-        {
-            state.Ai["provider"] = JsonValue.Create(answers.AiProvider);
-        }
-
-        if (!string.IsNullOrWhiteSpace(answers.AiModel))
-        {
-            state.Ai["model"] = JsonValue.Create(answers.AiModel);
-        }
+        SetAiRole(state, "orchestrator", answers.AiProvider, answers.AiModel);
+        SetAiRole(state, "builder", answers.BuilderProvider, answers.BuilderModel);
 
         state.Updates.AutoCheck = answers.AutoCheckUpdates;
 
@@ -221,5 +236,30 @@ public sealed class SetupService
         RootLocator.SaveRoot(root);
 
         return new SetupResult(true, $"Endo is set up at '{root}'.", root, changedFiles, diagnostics);
+    }
+
+    /// <summary>Writes ai.&lt;role&gt;.provider/model. Only touches fields actually answered, so re-running setup for one role never blanks out the other.</summary>
+    private static void SetAiRole(EnvironmentState state, string role, string? provider, string? model)
+    {
+        if (string.IsNullOrWhiteSpace(provider) && string.IsNullOrWhiteSpace(model))
+        {
+            return;
+        }
+
+        if (!state.Ai.TryGetPropertyValue(role, out var existing) || existing is not JsonObject section)
+        {
+            section = new JsonObject();
+            state.Ai[role] = section;
+        }
+
+        if (!string.IsNullOrWhiteSpace(provider))
+        {
+            section["provider"] = JsonValue.Create(provider);
+        }
+
+        if (!string.IsNullOrWhiteSpace(model))
+        {
+            section["model"] = JsonValue.Create(model);
+        }
     }
 }

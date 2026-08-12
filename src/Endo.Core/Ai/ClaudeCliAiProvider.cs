@@ -43,6 +43,12 @@ public sealed class ClaudeCliAiProvider : IAiProvider
             RedirectStandardInput = true,
             UseShellExecute = false,
             CreateNoWindow = true,
+            // Without this, .NET reads the child's stdout using the console's codepage rather than
+            // UTF-8 on Windows -- the CLI's actual output is UTF-8 JSON, so any multi-byte
+            // character (em-dashes, curly quotes, ...) came through as mojibake (confirmed
+            // directly: "—" round-tripped as "ΓÇö").
+            StandardOutputEncoding = System.Text.Encoding.UTF8,
+            StandardErrorEncoding = System.Text.Encoding.UTF8,
         };
 
         psi.ArgumentList.Add("-p");

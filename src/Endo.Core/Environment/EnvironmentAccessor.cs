@@ -48,9 +48,9 @@ public sealed class ProjectsManager
 
     internal ProjectsManager(EnvironmentAccessor env) => _env = env;
 
-    public ProjectCreationResult Add(string category, string subCategory, string name, string? ide = null)
+    public ProjectCreationResult Add(string category, string subCategory, string name, string? ide = null, string? template = null)
     {
-        var result = _service.CreateProject(_env.State, category, subCategory, name, ide);
+        var result = _service.CreateProject(_env.State, category, subCategory, name, ide, template);
         if (result.Success)
         {
             _env.SaveAfterMutation();

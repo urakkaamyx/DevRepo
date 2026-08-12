@@ -16,7 +16,7 @@ public sealed class ProjectService
 {
     public static string ProjectKey(string category, string subCategory, string name) => $"{category}/{subCategory}/{name}";
 
-    public ProjectCreationResult CreateProject(EnvironmentState state, string category, string subCategory, string name)
+    public ProjectCreationResult CreateProject(EnvironmentState state, string category, string subCategory, string name, string? ide = null)
     {
         var diagnostics = new List<string>();
         var changedFiles = new List<string>();
@@ -64,6 +64,7 @@ public sealed class ProjectService
             Identity = new ProjectIdentity { Name = name, Category = category, SubCategory = subCategory },
             Paths = new ProjectPaths { Root = projectRoot },
             Repository = new ProjectRepository { Type = "git", Remote = null },
+            Ide = string.IsNullOrWhiteSpace(ide) ? null : ide,
         };
 
         var projectJsonPath = Path.Combine(projectRoot, "project.json");
@@ -77,7 +78,6 @@ public sealed class ProjectService
             Name = name,
             Category = category,
             SubCategory = subCategory,
-            Path = projectRoot,
             CreatedAt = now,
             UpdatedAt = now,
         };
@@ -94,13 +94,15 @@ public sealed class ProjectService
             return new ProjectCheckResult(false, new List<string> { $"'{key}' is not registered in environment.json." });
         }
 
-        if (!Directory.Exists(projectRef.Path))
+        var projectPath = projectRef.ResolvePath(state.Paths);
+
+        if (!Directory.Exists(projectPath))
         {
-            findings.Add($"Registered project directory is missing: '{projectRef.Path}'.");
+            findings.Add($"Registered project directory is missing: '{projectPath}'.");
             return new ProjectCheckResult(false, findings);
         }
 
-        var projectJsonPath = Path.Combine(projectRef.Path, "project.json");
+        var projectJsonPath = Path.Combine(projectPath, "project.json");
         if (!File.Exists(projectJsonPath))
         {
             findings.Add($"project.json is missing at '{projectJsonPath}'.");
@@ -118,9 +120,9 @@ public sealed class ProjectService
             findings.Add("project.json identity does not match environment.json registration.");
         }
 
-        if (!GitProcess.IsGitRepository(projectRef.Path))
+        if (!GitProcess.IsGitRepository(projectPath))
         {
-            findings.Add($"'{projectRef.Path}' is registered as a project but has no .git directory.");
+            findings.Add($"'{projectPath}' is registered as a project but has no .git directory.");
         }
 
         return new ProjectCheckResult(findings.Count == 0, findings);
@@ -137,17 +139,19 @@ public sealed class ProjectService
             throw new InvalidOperationException($"'{key}' is not a registered project.");
         }
 
+        var projectPath = projectRef.ResolvePath(state.Paths);
+
         if (!string.IsNullOrWhiteSpace(ideOverride))
         {
-            return (projectRef.Path, ideOverride);
+            return (projectPath, ideOverride);
         }
 
-        var projectJsonPath = Path.Combine(projectRef.Path, "project.json");
+        var projectJsonPath = Path.Combine(projectPath, "project.json");
         if (AtomicJsonWriter.TryRead<ProjectState>(projectJsonPath, out var project) && project is not null)
         {
-            return (projectRef.Path, project.Ide);
+            return (projectPath, project.Ide);
         }
 
-        return (projectRef.Path, null);
+        return (projectPath, null);
     }
 }

@@ -41,7 +41,6 @@ public sealed class RestoreServiceTests : IDisposable
             Name = "MyMod",
             Category = "GameModding",
             SubCategory = "Skyrim",
-            Path = Path.Combine(_tempDir, "Projects", "GameModding", "Skyrim", "MyMod"),
         };
 
         var report = _service.RestoreProjects(state);
@@ -65,7 +64,6 @@ public sealed class RestoreServiceTests : IDisposable
             Name = "MyMod",
             Category = "GameModding",
             SubCategory = "Skyrim",
-            Path = projectPath,
         };
 
         var report = _service.RestoreProjects(state);
@@ -107,7 +105,6 @@ public sealed class RestoreServiceTests : IDisposable
             Name = "MyMod",
             Category = "GameModding",
             SubCategory = "Skyrim",
-            Path = Path.Combine(_tempDir, "Projects", "GameModding", "Skyrim", "MyMod"),
         };
 
         var report = _service.RestoreAll(state);

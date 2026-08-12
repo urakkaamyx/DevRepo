@@ -39,7 +39,6 @@ public sealed class EnvironmentRepositoryTests : IDisposable
             Name = "MyMod",
             Category = "GameModding",
             SubCategory = "Skyrim",
-            Path = Path.Combine(_tempDir, "Projects", "GameModding", "Skyrim", "MyMod"),
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
         };
@@ -67,15 +66,13 @@ public sealed class EnvironmentRepositoryTests : IDisposable
     [Fact]
     public void DetectDrift_MissingProjectDirectory_IsReported()
     {
-        var state = new EnvironmentState();
-        var missingPath = Path.Combine(_tempDir, "Projects", "GameModding", "Skyrim", "Ghost");
+        var state = new EnvironmentState { Paths = new PathsInfo { Workspace = Path.Combine(_tempDir, "Projects") } };
         state.Projects["GameModding/Skyrim/Ghost"] = new ProjectRef
         {
             Key = "GameModding/Skyrim/Ghost",
             Name = "Ghost",
             Category = "GameModding",
             SubCategory = "Skyrim",
-            Path = missingPath,
         };
 
         var drift = _repository.DetectDrift(state);
@@ -92,5 +89,59 @@ public sealed class EnvironmentRepositoryTests : IDisposable
         var drift = _repository.DetectDrift(state);
 
         Assert.False(drift.HasDrift);
+    }
+
+    [Fact]
+    public void Save_WritesOneFilePerTopLevelSection()
+    {
+        _repository.Save(new EnvironmentState());
+
+        var configDir = Path.Combine(_tempDir, "config");
+        foreach (var section in new[]
+                 {
+                     "schema", "identity", "paths", "workspace", "repositories", "projects",
+                     "tools", "runtimes", "libraries", "ai", "updates", "preferences",
+                     "restore", "history", "metadata",
+                 })
+        {
+            Assert.True(File.Exists(Path.Combine(configDir, $"{section}.json")), $"Expected {section}.json to exist.");
+        }
+
+        // No monolithic environment.json left behind alongside the section files.
+        Assert.False(File.Exists(Path.Combine(configDir, "environment.json")));
+    }
+
+    [Fact]
+    public void Save_TouchingOneSection_LeavesOtherSectionsByteForByteUnchanged()
+    {
+        var state = new EnvironmentState();
+        _repository.Save(state);
+
+        var toolsPath = Path.Combine(_tempDir, "config", "tools.json");
+        var toolsJsonBeforeSecondSave = File.ReadAllText(toolsPath);
+
+        state.Projects["GameModding/Skyrim/MyMod"] = new ProjectRef { Key = "GameModding/Skyrim/MyMod", Name = "MyMod", Category = "GameModding", SubCategory = "Skyrim" };
+        _repository.Save(state);
+
+        Assert.Equal(toolsJsonBeforeSecondSave, File.ReadAllText(toolsPath));
+    }
+
+    [Fact]
+    public void Load_MigratesLegacySingleFileEnvironmentJson()
+    {
+        var configDir = Path.Combine(_tempDir, "config");
+        Directory.CreateDirectory(configDir);
+        var legacyState = new EnvironmentState();
+        legacyState.Projects["GameModding/Skyrim/MyMod"] = new ProjectRef { Key = "GameModding/Skyrim/MyMod", Name = "MyMod", Category = "GameModding", SubCategory = "Skyrim" };
+        Endo.Core.Json.AtomicJsonWriter.Write(Path.Combine(configDir, "environment.json"), legacyState);
+
+        Assert.True(_repository.Exists());
+
+        var loaded = _repository.Load();
+
+        Assert.True(loaded.Projects.ContainsKey("GameModding/Skyrim/MyMod"));
+        // Migration should have split it into section files and removed the legacy file.
+        Assert.True(File.Exists(Path.Combine(configDir, "projects.json")));
+        Assert.False(File.Exists(Path.Combine(configDir, "environment.json")));
     }
 }

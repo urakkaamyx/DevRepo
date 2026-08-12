@@ -1,0 +1,22 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>endo</AssemblyName>
+    <RootNamespace>Endo</RootNamespace>
+    <!-- WPF's XAML binding engine (Language-based template lookups) needs real culture data;
+         InvariantGlobalization here throws "Cannot find non-neutral culture related to 'en-us'"
+         as soon as any templated control (e.g. a ListBox item) is measured. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Endo.Core\Endo.Core.csproj" />
+    <ProjectReference Include="..\Endo.Cli\Endo.Cli.csproj" />
+    <ProjectReference Include="..\Endo.Gui\Endo.Gui.csproj" />
+  </ItemGroup>
+
+</Project>

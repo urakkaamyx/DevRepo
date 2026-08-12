@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Endo.Core.Ai;
 using Endo.Core.Diagnostics;
 using Endo.Core.Environment;
 using Endo.Core.Git;
@@ -26,10 +27,18 @@ public sealed record SetupAnswers(
 /// </summary>
 public sealed class SetupService
 {
+    private readonly IClaudeCliInstaller _claudeCliInstaller;
+
+    public SetupService(IClaudeCliInstaller? claudeCliInstaller = null)
+    {
+        _claudeCliInstaller = claudeCliInstaller ?? new ClaudeCliInstaller();
+    }
+
     public SetupResult RunInteractive(SetupPrompts prompts)
     {
+        var setupDiagnostics = new List<string>();
         var existingRoot = RootLocator.TryLocateRoot();
-        if (existingRoot is not null && Directory.Exists(existingRoot) && File.Exists(Path.Combine(existingRoot, "config", "environment.json")))
+        if (existingRoot is not null && Directory.Exists(existingRoot) && new EnvironmentRepository(existingRoot, Logger.CreateNullLogger()).Exists())
         {
             var reinit = prompts.Confirm(
                 $"Endo is already set up at '{existingRoot}'. Re-run setup and overwrite the existing configuration choices?",
@@ -40,13 +49,13 @@ public sealed class SetupService
             }
         }
 
-        // 1. Endo managed root.
+        // 1. Environment location (config, tools, runtimes, DevRepo).
         var suggestedRoot = existingRoot ?? RootLocator.SuggestDefaultRoot();
-        var root = prompts.Prompt("Endo managed root directory", suggestedRoot);
+        var root = prompts.Prompt("Environment location (config, tools, runtimes, DevRepo)", suggestedRoot);
 
-        // 2. Project/workspace location.
+        // 2. Default Projects folder.
         var suggestedWorkspace = RootLocator.SuggestDefaultWorkspace(root);
-        var workspace = prompts.Prompt("Projects/workspace location", suggestedWorkspace);
+        var workspace = prompts.Prompt("Default Projects folder", suggestedWorkspace);
 
         // 3. DevRepo.
         var devRepoPath = Path.Combine(root, "DevRepo");
@@ -62,12 +71,62 @@ public sealed class SetupService
         else if (aiProvider.Trim().Equals("claude-cli", StringComparison.OrdinalIgnoreCase))
         {
             aiModel = prompts.Prompt("Model override for the claude CLI (leave blank to use its own default)", "");
+            BootstrapClaudeCli(prompts, setupDiagnostics);
         }
 
         // 5. Update preferences.
         var autoCheckUpdates = prompts.Confirm("Automatically check for Endo updates?", true);
 
-        return Apply(new SetupAnswers(root, workspace, initDevRepo, aiProvider, autoCheckUpdates, aiModel));
+        var result = Apply(new SetupAnswers(root, workspace, initDevRepo, aiProvider, autoCheckUpdates, aiModel));
+        return setupDiagnostics.Count == 0
+            ? result
+            : result with { Diagnostics = [.. setupDiagnostics, .. result.Diagnostics] };
+    }
+
+    /// <summary>
+    /// Offers to install (`npm install -g @anthropic-ai/claude-code`) and log into the claude CLI
+    /// right when the user picks it as their AI provider, rather than leaving them to discover the
+    /// gap the first time `endo ai ask` fails. Interactive-only — this never runs from <see cref="Apply"/>
+    /// since installing global npm packages and launching a browser OAuth flow are not things an
+    /// AI-orchestrated, non-interactive setup call should trigger as a side effect.
+    /// </summary>
+    private void BootstrapClaudeCli(SetupPrompts prompts, List<string> diagnostics)
+    {
+        var status = _claudeCliInstaller.GetStatus();
+
+        if (!status.Installed)
+        {
+            var install = prompts.Confirm(
+                "The claude CLI isn't installed yet. Install it now via 'npm install -g @anthropic-ai/claude-code'?", true);
+            if (install)
+            {
+                var installResult = _claudeCliInstaller.InstallViaNpm();
+                diagnostics.Add(installResult.Message);
+                if (installResult.Success)
+                {
+                    status = _claudeCliInstaller.GetStatus();
+                }
+            }
+            else
+            {
+                diagnostics.Add("claude CLI install skipped — run 'endo ai install claude-cli' later.");
+            }
+        }
+
+        if (status.Installed && status.LoggedIn != true)
+        {
+            var login = prompts.Confirm(
+                "Log into the claude CLI now? This opens 'claude auth login' (browser-based OAuth).", true);
+            if (login)
+            {
+                var loginResult = _claudeCliInstaller.Login();
+                diagnostics.Add(loginResult.Message);
+            }
+            else
+            {
+                diagnostics.Add("claude CLI login skipped — run 'endo ai login claude-cli' later.");
+            }
+        }
     }
 
     /// <summary>Deterministic setup core — the part an AI-orchestrated `setup` command actually runs.</summary>

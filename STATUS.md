@@ -27,7 +27,7 @@ build/
     Endo.Cli/    — argument parsing, interactive prompts, dispatch to CommandEngine
     Endo.Core/   — everything else, organized by roadmap phase (see below)
   tests/
-    Endo.Core.Tests/  — 48 xUnit tests, all passing
+    Endo.Core.Tests/  — 57 xUnit tests, all passing
 ```
 
 `Endo.Core` is deliberately one assembly with feature-folder namespaces
@@ -268,6 +268,34 @@ that surfaced it.
     right choice when "reuse my existing login, zero setup" matters more than per-call cost/
     latency; `AnthropicAiProvider` (once a credential is available to test it) should be cheaper
     per call for high-volume use.
+- **`ClaudeCliInstaller`** (`Endo.Core/Ai/ClaudeCliInstaller.cs`, behind an `IClaudeCliInstaller`
+  interface so command/setup logic is testable against a fake without shelling out): closes the
+  gap that `ClaudeCliAiProvider` previously just assumed the `claude` CLI was already installed
+  and logged in. `GetStatus()` runs `claude --version` then `claude auth status --json` (parsing
+  the real `loggedIn`/`email` fields); `InstallViaNpm()` checks `npm` is on PATH first, then runs
+  `npm install -g @anthropic-ai/claude-code` with output streamed live to the console (not
+  captured — same reasoning as `OllamaServerManager.PullModel`); `Login()` launches
+  `claude auth login` interactively and re-checks status afterward — this step is inherently a
+  browser-based OAuth flow and cannot be scripted. Three thin `ICommand`s wrap it (`claudeCli.status`
+  / `claudeCli.install` / `claudeCli.login`, one class per file, each taking `IClaudeCliInstaller`
+  via constructor injection — matching the existing `ToolInstallCommand(toolService)` DI pattern
+  rather than each command `new`-ing up its own dependency), wired to `endo ai status|install|login
+  claude-cli`. The CLI layer (not the deterministic command itself) asks for interactive
+  confirmation before `install claude-cli` — installing a package globally via npm is exactly the
+  kind of system-wide, hard-to-reverse action that should be a "continue?" prompt, not a silent
+  side effect of an AI-orchestrated request — and, on success, offers to chain straight into login,
+  matching the original request to both install and authenticate in one flow. `endo setup`'s
+  interactive flow now also offers both steps right when a user picks `claude-cli` as their AI
+  provider, so the gap is caught at the point a first-time user would actually hit it. Deliberately
+  *not* wired into `SetupService.Apply` (the non-interactive core an AI-orchestrated `setup` call
+  would run) — auto-installing a global npm package and popping a browser OAuth flow as a side
+  effect of a headless setup call would be the wrong default. **Verified live**: `endo ai status
+  claude-cli` correctly detected this machine's real installed-and-logged-in `claude` session;
+  `endo ai install claude-cli` correctly no-op'd at both steps (already installed, already logged
+  in) without ever invoking the real `npm install -g` or `claude auth login` — those mutation paths
+  themselves are exercised only via unit tests against a deliberately-unresolvable executable name,
+  since running them for real here would have modified this machine's actual global npm state for
+  no reason (it already has `claude` installed a different way).
 - **`OllamaServerManager`** (`Endo.Core/Ai/OllamaServerManager.cs`) + `ollama.serve`/`ollama.pull`
   commands: starts the workspace Ollama binary as a detached background process only if nothing is
   already responding at the configured address (never assumes a fixed startup delay — polls),
@@ -295,8 +323,9 @@ that surfaced it.
   environment. Whatever command name comes back is checked against the real registry before
   executing; an unrecognized name is refused. Both `AskAsync` and `DiscoverToolsAsync` now request
   `ForceJsonOutput: true`.
-- `endo ai ask "<request>"`, `endo ai discover <Category> <SubCategory>`, and
-  `endo ai serve [--model <name>] [--base-url <url>]` are all wired into the CLI.
+- `endo ai ask "<request>"`, `endo ai discover <Category> <SubCategory>`,
+  `endo ai serve [--model <name>] [--base-url <url>]`, and `endo ai status|install|login
+  claude-cli` are all wired into the CLI.
 - Known gap carried over from before: if Anthropic's server-side web-search loop hits its default
   10-iteration cap (`stop_reason: "pause_turn"`), `AnthropicAiProvider` does not resume the turn —
   judged not worth the fragility of manually reconstructing response content for what should be an
@@ -327,7 +356,7 @@ that surfaced it.
   system" the spec explicitly warns against re-inventing at the container layer.
 
 ### Phase 10 — Hardening: **Partially covered, substantially expanded this session**
-Covered by the test suite (48 tests): interrupted/invalid atomic writes, missing environment.json,
+Covered by the test suite (57 tests): interrupted/invalid atomic writes, missing environment.json,
 missing project directories (drift), unknown commands, empty DevRepo checkpoints, plus:
 - Interrupted/failed build mid-`ToolService.Install` (`ToolServiceHardeningTests`): a failing build
   command leaves Scratchpad evidence in place, registers nothing, and records the bounded-retry
@@ -366,6 +395,156 @@ Anthropic SDK path specifically (`claude-cli` closed the "live Claude" gap in ge
 itself, which talks to the API directly rather than through the CLI, is still only verified for
 its no-credential failure path).
 
+## Beyond the 16 spec files (explicitly requested by the user)
+
+These aren't part of any 01–15-*.md phase — flagged here separately so they're not mistaken for
+spec-derived work, per the standing rule against inventing unrequested systems.
+
+- **Visual Studio debugging** (`src/Endo.Cli/Properties/launchSettings.json`): F5 with no args was
+  hitting `Main`'s `args.Length == 0` fast path and exiting almost instantly — the "press any key"
+  prompt was VS's normal wrapper around an already-finished process, not a debugger problem. Added
+  named launch profiles (`setup`, `project new`, `tool list`, `ai status claude-cli`, `ai ask`),
+  each pointed at an isolated `ENDO_ROOT` (`build/.debug-root`) so debugging never touches the
+  user's real managed root.
+- **`endo help`** (`Endo.Core/Commands/HelpCommand.cs`): the CLI's old hand-written usage text had
+  already drifted (it was missing the `claudeCli.*` verbs). `HelpCommand` reads live off
+  `CommandEngine.ListCommands()` — the same `Name`/`Description`/`Parameters` catalog
+  `AiOrchestrator` sends the AI provider — so the reference documentation can't drift out of sync
+  with what commands actually exist. `endo help` / `--help` / `-h` work even before `endo setup`
+  has run.
+- **`EndoCommandEngineFactory`** (`Endo.Core/Commands/EndoCommandEngineFactory.cs`): the command
+  registration list itself was extracted out of `Endo.Cli/Program.cs` into `Endo.Core` so a second
+  entry point (the GUI, below) can't independently drift the way the usage text did — one
+  registration list, every caller.
+- **`Endo.Gui`** (WPF, `net10.0-windows`, `CommunityToolkit.Mvvm`): a desktop chat client — plain
+  text routes through the same `AiOrchestrator.AskAsync` loop `endo ai ask` uses (never a second
+  implementation of it); a `!<command>` prefix runs the rest of the line through real
+  `powershell.exe` with output streamed live into a growing bubble; typing `help` runs the `help`
+  command directly (no AI round-trip). `App.xaml.cs` is the composition root: if no managed root
+  with `environment.json` exists yet, a graphical `SetupWindow` collects the same answers the
+  console prompts would and calls the exact same deterministic `SetupService.Apply` core (plus
+  Install/Login buttons wired straight to `IClaudeCliInstaller` when `claude-cli` is picked).
+  Services are interface-first (`IShellRunner`/`PowerShellRunner`, `IChatEngine`/`ChatEngine`) and
+  one class per file, per explicit direction to keep this OOP rather than one big file.
+  **Verified live**: built clean, launched, and — while investigating why it skipped straight to
+  the chat window instead of showing `SetupWindow` — found it had loaded a real leftover
+  environment from an earlier debugging session (see caveat below) rather than hitting a bug; typing
+  `help` in the running window correctly returned the live, alphabetically-sorted, auto-scrolled
+  command catalog.
+  **Follow-up round, all requested directly**: a command sidebar (bound to the same
+  `CommandDescriptor` catalog `endo help` prints — double-clicking an entry drops a fill-in-the-
+  blanks template like `project.new category=<category> subCategory=<subCategory> name=<name>`
+  into the chat box via `CommandTemplateBuilder`, using each command's real parameter names, never
+  invented ones); `ChatEngine` gained a direct-execution path — if the first word of the input is a
+  real registered command name, it's parsed as `key=value` pairs (quoted values supported) and
+  executed straight through `CommandEngine`, no AI round-trip — the same format the sidebar
+  produces, so filling in a template and hitting Enter just works, and this also means typing a
+  bare command name like `help` directly executes it (the earlier hard-coded `"help"` special case
+  in `ChatEngine` was removed as redundant once this existed). Also fixed a real, reproducible
+  crash: `SetupWindow`'s XAML had `IsSelected="True"` on the first `ComboBoxItem`, which fires
+  `SelectionChanged` *during* `InitializeComponent()` — before later-declared named fields
+  (`ClaudeCliPanel`) are assigned — throwing a `NullReferenceException` on every launch that needed
+  first-run setup; fixed by setting `ProviderCombo.SelectedIndex = 0` in code after
+  `InitializeComponent()` instead. Also fixed Enter/Shift+Enter: the input `TextBox`'s own
+  `AcceptsReturn` newline handling runs during the bubbling `KeyDown` phase, so a same-named
+  `KeyDown` handler can't reliably suppress it (the newline is already inserted by the time it
+  fires); switched to `PreviewKeyDown` (tunneling, runs first) so plain Enter sends and Shift+Enter
+  newlines, consistently. **Verified live**: both the crash and its fix were reproduced/confirmed
+  directly (crash trace captured from a real run, then a clean `exit code 0` from both an
+  independently-launched instance and the user's own Visual Studio F5 run after the fix).
+  **Known caveat, needs a decision, not yet acted on**: an earlier CLI verification step in this
+  session ran `endo setup` with the literal answer `/tmp/endo-livetest-...` for the managed root.
+  On Windows, .NET resolves a leading-slash-no-drive-letter path against the *current drive*, not
+  against Git Bash's own `/tmp` mount — so the real directory landed at
+  `G:\tmp\endo-livetest-1786445860\` (plus a sibling `G:\tmp\Projects\`), and the `rm -rf
+  /tmp/endo-livetest-*` cleanup that followed (which resolved through Git Bash's own `/tmp`) never
+  touched it. It was genuinely deleted at one point (verified — `config/environment.json` was
+  briefly absent, correctly sending `Endo.Gui` through `SetupWindow` instead of straight to the
+  chat), but during live testing of the fixed `SetupWindow` the user completed the setup form with
+  its auto-filled default (still that same stale path, since `RootLocator`'s pointer file still
+  named it) and picked `claude-cli` as the provider — so `G:\tmp\endo-livetest-1786445860\` is now
+  a genuinely valid, intentionally-configured Endo root again, not leftover debris to silently
+  delete. Left as-is; whether to keep it or re-run `endo setup`/the GUI's setup flow with a cleaner
+  root path is the user's call, not something to decide unilaterally.
+
+## Fixing real bugs found by using it (this session, after live GUI testing)
+
+Live use of the GUI surfaced concrete, reproducible problems — not hypothetical gaps. Each one
+below was traced to a specific line of behavior before being fixed, per this session's standing
+rule against guessing.
+
+- **AI-driven `project.new` was miscategorizing GameModding projects** (observed: a Scrap Mechanic
+  mod landed at something like `Games/Mod/<name>` instead of `GameModding/ScrapMechanic/<name>`,
+  and a discovered tool ended up scoped to a *different* wrong spelling than the project itself —
+  `Games/Scrap Mechanic`). Root cause: `AiOrchestrator`'s system prompt told the model command
+  *signatures* but never the taxonomy rule 04-PROJECT-SPEC.md actually states ("For GameModding
+  projects, the GameName layer is required" — category is always `GameModding`, never `Games` or
+  `Mods`). Fixed by adding that rule explicitly to the system prompt, plus a live list of
+  Category/SubCategory pairs already on record in `environment.json` with an instruction to reuse
+  an exact existing spelling rather than reinventing one — which is what closes the
+  project/tool-scoping inconsistency, not just the wrong category name.
+- **"It doesn't grab the tools"** — this is not a missing feature, it's 04-PROJECT-SPEC.md's
+  "GameModding Discovery" section ("When a new GameModding game is created ... Endo should notify
+  the user of available tools") and 06-AI-SPEC.md's "Command Chaining" worked example (creating a
+  Skyrim project chains through search → identify tools → register), neither of which was ever
+  wired up. `AiOrchestrator.AskAsync` now detects when a successful `project.new` is the *first*
+  project under a `GameModding/<game>` pair and automatically runs discovery — reporting found
+  candidates with their repository URLs rather than auto-installing, so a follow-up chat message
+  ("install SmSdk") can name one specifically; this leans on the conversation-history fix from
+  earlier in the session rather than needing bespoke pending-selection state.
+- **No interactive, guided project creation** — confirmed against every spec file: "interactive" is
+  *only* ever specified for `endo setup`, never `project new`, so this was a genuine, deliberately-
+  scoped new feature, not a missed requirement. Built after confirming scope directly with the user
+  (checklist-based tool selection, fixed-list-plus-custom IDE picker, both GUI and CLI):
+  - `Endo.Gui/Views/NewProjectWindow` — Category/SubCategory/Name, IDE (`ProjectLauncher
+    .KnownIdeAliases` + custom), Runtime (only shown if any are registered), then for a new
+    GameModding game: runs `AiOrchestrator.FindCandidatesAsync`, shows results as a checkbox list
+    (pre-checked, user can uncheck), and only installs what's still checked via the new
+    `InstallCandidates` method. Opened from a "+ New Project" button in the chat window's status bar.
+  - `Endo.Cli`'s bare `endo project new` (no positional args) gained the identical guided flow via
+    console prompts — a numbered candidate list instead of checkboxes. Positional-arg invocation
+    (`endo project new Cat Sub Name`, for scripts) stays fully non-interactive, per 02-CLI-SPEC.md's
+    constraint against adding approval gates to ordinary automated operation.
+  - This required splitting `DiscoverToolsAsync` (search-and-install-everything, still used
+    unchanged by the standalone `endo ai discover` CLI verb) into `FindCandidatesAsync`
+    (search-only) and `InstallCandidates` (install a given subset) — two callers, one underlying
+    implementation, not a forked copy.
+  - Also needed a way to actually *set* a project's IDE — `project.json`'s `ide` field existed and
+    was read (`project.open`) but nothing ever wrote it except manual editing. `project.new` now
+    accepts an optional `ide` argument.
+- **Chat bubbles couldn't be selected or copied** — they were plain `TextBlock`s, which WPF never
+  makes selectable. Swapped to read-only, borderless `TextBox` (`IsReadOnly="True"`, transparent
+  background, no visible caret) — visually identical, but now supports real click-drag selection
+  and Ctrl+C, without changing anything else about the layout.
+
+**Verified**: `Endo.Core` + `Endo.Cli` + `Endo.Gui` all build clean together, all 57 tests still
+pass. **Not yet verified live in this session**: the new `NewProjectWindow`/CLI discovery-checklist
+flow hasn't been exercised against a real AI provider end-to-end (the taxonomy/chaining fixes to
+`AiOrchestrator` were verified only by build+test, not a live conversation) — that's the next thing
+to actually click through, not just compile.
+
+## DevRepo now has a real remote
+
+Asking "what would a different machine need to do" surfaced that DevRepo (this session's test root
+at `G:\tmp\endo-livetest-1786445860\DevRepo`) had zero commits — `devrepo.checkpoint` had never
+actually been run for real. Fixed for real, not hypothetically:
+- Ran `endo devrepo checkpoint` directly against the compiled exe — it correctly proceeded without
+  a `PUSH.md` (that's handled gracefully, just noted as a diagnostic, not a blocker) and committed
+  `config/environment.json` as the first real commit.
+- Added `https://github.com/urakkaamyx/DevRepo.git` as `origin` and pushed — verified live via the
+  GitHub API that the commit and `config/` are actually there, not just locally believed to be.
+- **Path-resolution footgun found along the way**: passing `ENDO_ROOT=/tmp/endo-livetest-...` as an
+  env var to a directly-executed `.exe` from Git Bash silently mangles the path (MSYS/Git Bash's
+  automatic POSIX-path translation for env vars, not a .NET drive-resolution issue as earlier
+  guessed) — using the explicit Windows-style path (`G:\tmp\endo-livetest-1786445860`) works
+  correctly. This is almost certainly the real explanation for the whole "leftover directory" saga
+  earlier in this session, not the drive-relative-path theory originally written down there.
+- **Still separate and still not pushed anywhere**: the Endo *source code* itself
+  (`build/`, this whole implementation) has no git remote of its own — `urakkaamyx/DevRepo` is
+  DevRepo's remote specifically, not a place to clone Endo from. That's still a real, open gap for
+  "get the tool running on a different machine" (as opposed to "restore my environment," which
+  DevRepo now genuinely supports).
+
 ## What a next session should pick up first
 
 1. Exercise `AnthropicAiProvider` (the raw SDK path, not `claude-cli`) under a real
@@ -385,3 +564,8 @@ its no-credential failure path).
 6. Consider having discovered-tool README content actually parsed for build instructions (Phase 5
    currently only detects README presence, not its contents) and implementing `pause_turn`
    resumption in `AnthropicAiProvider` if long research queries turn out to need it in practice.
+7. `ClaudeCliInstaller.InstallViaNpm()`/`Login()` are only verified against an unresolvable
+   executable name (honest-failure path) — the actual "npm installs claude for real" and "OAuth
+   login for real" paths have not been exercised end-to-end on a machine that doesn't already have
+   `claude` installed, since doing that here would have altered this machine's real global npm
+   state for no reason.

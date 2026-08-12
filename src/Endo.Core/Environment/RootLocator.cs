@@ -74,6 +74,19 @@ public static class RootLocator
     /// <summary>Suggested default managed root, offered (not forced) during interactive setup.</summary>
     public static string SuggestDefaultRoot()
     {
+        // Recognizes the Source/Build/Environment/Projects sibling layout Setup.ps1 creates: when
+        // endo.exe is running from a `Build` directory, default to the `Environment` sibling next
+        // to it rather than the generic per-user location below.
+        var exeDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (string.Equals(Path.GetFileName(exeDir), "Build", StringComparison.OrdinalIgnoreCase))
+        {
+            var repoRoot = Directory.GetParent(exeDir)?.FullName;
+            if (repoRoot is not null)
+            {
+                return Path.Combine(repoRoot, "Environment");
+            }
+        }
+
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
             var localAppData = System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData);

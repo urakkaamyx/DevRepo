@@ -325,7 +325,7 @@ public sealed class ToolService
         var dependents = new List<string>();
         foreach (var projectRef in state.Projects.Values)
         {
-            var projectJsonPath = Path.Combine(projectRef.Path, "project.json");
+            var projectJsonPath = Path.Combine(projectRef.ResolvePath(state.Paths), "project.json");
             if (AtomicJsonWriter.TryRead<ProjectState>(projectJsonPath, out var project) && project is not null)
             {
                 if (project.Dependencies.Tools.ContainsKey(name))

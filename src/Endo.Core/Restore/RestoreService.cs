@@ -19,10 +19,11 @@ public sealed class RestoreService
 
         foreach (var (key, projectRef) in state.Projects)
         {
-            var dirExists = Directory.Exists(projectRef.Path);
-            var projectJsonPath = Path.Combine(projectRef.Path, "project.json");
+            var projectPath = projectRef.ResolvePath(state.Paths);
+            var dirExists = Directory.Exists(projectPath);
+            var projectJsonPath = Path.Combine(projectPath, "project.json");
             var hasProjectJson = dirExists && File.Exists(projectJsonPath);
-            var hasGit = dirExists && GitProcess.IsGitRepository(projectRef.Path);
+            var hasGit = dirExists && GitProcess.IsGitRepository(projectPath);
 
             if (dirExists && hasProjectJson && hasGit)
             {
@@ -36,7 +37,7 @@ public sealed class RestoreService
                 var projectJsonOnDisk = hasProjectJson; // impossible here, kept for clarity
                 report.Missing.Add(key);
                 report.Unresolved.Add(
-                    $"{key}: directory missing at '{projectRef.Path}' and no local source is recorded to reconstruct it from. " +
+                    $"{key}: directory missing at '{projectPath}' and no local source is recorded to reconstruct it from. " +
                     "Project Git repositories are independent of DevRepo, so Endo cannot fabricate their history.");
                 continue;
             }
@@ -50,7 +51,7 @@ public sealed class RestoreService
                 var reconstructed = new ProjectState
                 {
                     Identity = new ProjectIdentity { Name = projectRef.Name, Category = projectRef.Category, SubCategory = projectRef.SubCategory },
-                    Paths = new ProjectPaths { Root = projectRef.Path },
+                    Paths = new ProjectPaths { Root = projectPath },
                     Repository = new ProjectRepository { Type = "git", Remote = null },
                 };
                 AtomicJsonWriter.Write(projectJsonPath, reconstructed);
@@ -60,7 +61,7 @@ public sealed class RestoreService
 
             if (!hasGit)
             {
-                var init = GitProcess.Run(projectRef.Path, "init");
+                var init = GitProcess.Run(projectPath, "init");
                 if (init.Success)
                 {
                     report.Repaired.Add($"{key}: re-initialized missing Git repository (no prior history existed to recover).");
@@ -82,7 +83,7 @@ public sealed class RestoreService
         // Existing but unmanaged: project directories on disk that environment.json does not know about.
         if (Directory.Exists(state.Paths.Workspace))
         {
-            var known = state.Projects.Values.Select(p => Path.GetFullPath(p.Path)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var known = state.Projects.Values.Select(p => Path.GetFullPath(p.ResolvePath(state.Paths))).ToHashSet(StringComparer.OrdinalIgnoreCase);
             foreach (var categoryDir in SafeEnumerateDirectories(state.Paths.Workspace))
             foreach (var subCategoryDir in SafeEnumerateDirectories(categoryDir))
             foreach (var projectDir in SafeEnumerateDirectories(subCategoryDir))

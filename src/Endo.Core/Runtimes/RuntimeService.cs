@@ -55,7 +55,7 @@ public sealed class RuntimeService
             return (false, $"Version '{version}' of runtime '{runtimeName}' is not installed. Installed versions: {string.Join(", ", manifest.Versions.Keys)}");
         }
 
-        var projectJsonPath = Path.Combine(projectRef.Path, "project.json");
+        var projectJsonPath = Path.Combine(projectRef.ResolvePath(state.Paths), "project.json");
         if (!AtomicJsonWriter.TryRead<ProjectState>(projectJsonPath, out var project) || project is null)
         {
             return (false, $"project.json could not be read at '{projectJsonPath}'.");

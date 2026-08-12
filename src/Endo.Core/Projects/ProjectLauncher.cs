@@ -21,6 +21,9 @@ public static class ProjectLauncher
         ["rider"] = "rider64.exe",
     };
 
+    /// <summary>The recognized alias spellings, for UI pickers (GUI dialog, CLI prompts) to offer as a fixed list — a single source of truth so the choices shown always match what actually launches.</summary>
+    public static readonly IReadOnlyList<string> KnownIdeAliases = ["visual-studio", "vscode", "rider"];
+
     public static LaunchResult OpenDirectory(string path)
     {
         if (!Directory.Exists(path))

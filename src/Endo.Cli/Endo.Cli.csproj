@@ -9,9 +9,13 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <AssemblyName>endo</AssemblyName>
+    <AssemblyName>Endo.Cli.Debug</AssemblyName>
     <RootNamespace>Endo.Cli</RootNamespace>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Referenced by Endo.App for CliHost; excluded from Endo.App's publish output since Endo.Cli
+         is an Exe project in its own right (kept that way for standalone F5/launchSettings debugging)
+         and would otherwise leak its own runtimeconfig.json into the unified build. -->
+    <IsPublishable>false</IsPublishable>
   </PropertyGroup>
 
 </Project>

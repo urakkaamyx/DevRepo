@@ -1,0 +1,39 @@
+{
+  "profiles": {
+    "endo setup (debug root)": {
+      "commandName": "Project",
+      "commandLineArgs": "setup",
+      "environmentVariables": {
+        "ENDO_ROOT": "G:\\Endo\\Endo_Architecture_Package\\build\\.debug-root"
+      }
+    },
+    "endo project new": {
+      "commandName": "Project",
+      "commandLineArgs": "project new GameModding Skyrim DebugTest",
+      "environmentVariables": {
+        "ENDO_ROOT": "G:\\Endo\\Endo_Architecture_Package\\build\\.debug-root"
+      }
+    },
+    "endo tool list": {
+      "commandName": "Project",
+      "commandLineArgs": "tool list",
+      "environmentVariables": {
+        "ENDO_ROOT": "G:\\Endo\\Endo_Architecture_Package\\build\\.debug-root"
+      }
+    },
+    "endo ai status claude-cli": {
+      "commandName": "Project",
+      "commandLineArgs": "ai status claude-cli",
+      "environmentVariables": {
+        "ENDO_ROOT": "G:\\Endo\\Endo_Architecture_Package\\build\\.debug-root"
+      }
+    },
+    "endo ai ask": {
+      "commandName": "Project",
+      "commandLineArgs": "ai ask \"Create a new project called DebugTest under GameModding for Skyrim\"",
+      "environmentVariables": {
+        "ENDO_ROOT": "G:\\Endo\\Endo_Architecture_Package\\build\\.debug-root"
+      }
+    }
+  }
+}

@@ -95,7 +95,7 @@ public sealed class ProjectServiceTests : IDisposable
     public void CheckProject_DirectoryDeletedAfterRegistration_DetectsDrift()
     {
         _service.CreateProject(_state, "GameModding", "Skyrim", "MyMod");
-        Directory.Delete(_state.Projects["GameModding/Skyrim/MyMod"].Path, recursive: true);
+        Directory.Delete(_state.Projects["GameModding/Skyrim/MyMod"].ResolvePath(_state.Paths), recursive: true);
 
         var check = _service.CheckProject(_state, "GameModding/Skyrim/MyMod");
 
